@@ -18,9 +18,9 @@ keepalive_ms = 2000        # must stay below the ~3 s firmware watchdog
 preset_switch = "ask"      # an app with a preset gets focus: "ask" (popup), "auto", "off"
 notify = true              # banner when a controller connects or disconnects
                            # (not when you turn it off from the overlay)
-# Exclusive mode (puckd broker + 72-puckd-exclusive.rules, see README): Steam and games
-# can't open the controller themselves. puckd gives them a pass-through copy instead,
-# which they take over as a native Steam Controller; puckd steps aside until they let go.
+# Full install (puckd broker + 72-puckd-exclusive.rules, see README): Steam and games
+# can't open the controller themselves. puckd gives them a native copy instead: Steam
+# takes it over, games share it with puckd (see the manual).
 passthrough = true         # false: Steam and games never see the controller
 handover_buttons = "view+menu"  # hold for a second: hand the controller puckd <-> Steam
 

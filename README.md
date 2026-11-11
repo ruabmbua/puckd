@@ -35,13 +35,14 @@ haptics, troubleshooting.
   controller names, live settings.
 - **Presets** per game, optionally switched automatically when an app gets focus.
 - **Seamless Steam / Steam Input interaction**: by default puckd steps aside while Steam
-  (or an SDL3 game with native Steam Controller support) uses the controller. In the
-  optional exclusive mode, puckd owns the hardware and gives Steam a native pass-through
+  (or an SDL3 game with native Steam Controller support) uses the controller. With the
+  optional full install, puckd owns the hardware and gives Steam a native pass-through
   controller (gyro, trackpads, haptics, Steam button): Steam takes it over when it starts,
   and holding View + ≡ hands the controller back and forth between Steam and puckd. Games
   that drive the controller themselves share it with puckd: native input in gamepad mode,
   while puckd's overlay and mode switch keep working.
-  See [the manual](docs/manual.md#steam-steam-input-and-games).
+  See [the manual](docs/manual.md#steam-steam-input-and-games) and the
+  [full install](#full-install-steam-gets-the-real-controller).
 
 ## Requirements and compatibility
 
@@ -70,6 +71,22 @@ haptics, troubleshooting.
 
 ## Installation
 
+There are two ways to install puckd:
+
+| | Basic | Full |
+|---|---|---|
+| Runs as | your user only | your user, plus a small root helper started on demand |
+| Root setup | none, or one udev rule | udev rule, a systemd socket, a `puckd` group |
+| Gamepad and desktop modes, overlay, presets | yes | yes |
+| While Steam runs | puckd steps aside: Steam has the controller, puckd's overlay and mode switch are gone until Steam closes it | Steam gets the real controller (gyro, trackpads, haptics in Steam Input); hold View + ≡ Menu to switch between Steam and puckd |
+| Games that support the Steam Controller themselves (SDL3) | take the controller over, puckd steps aside | share it: native controller in gamepad mode, puckd's overlay and mode switch keep working |
+| Status | stable | experimental |
+
+See [Steam, Steam Input and games](docs/manual.md#steam-steam-input-and-games) in the manual
+for how each behaves.
+
+### Basic install
+
 ```sh
 cargo build --release
 ```
@@ -95,7 +112,33 @@ sudo install -m644 dist/70-puckd.rules /etc/udev/rules.d/
 sudo udevadm control --reload && sudo udevadm trigger   # then replug the Puck
 ```
 
-Run exactly one puckd: it drives every controller and every dongle slot.
+Run exactly one puckd: it drives every controller and every dongle slot. Then set it up to
+start with your session ([below](#setup-for)).
+
+### Full install: Steam gets the real controller
+
+Do the basic install first. The full install then makes puckd the only program that opens
+the controller, so it can give Steam and games a native Steam Controller and decide who gets
+the input. A small root helper (`puckd broker`) opens the devices for puckd; systemd starts
+it when puckd asks and it exits again after a minute. Members of the `puckd` group may use
+it ([details](docs/internals.md#steam-pass-through)).
+
+```sh
+sudo install -m755 target/release/puckd /usr/local/bin/      # root runs it: not from ~
+sudo groupadd -r puckd && sudo usermod -aG puckd $USER
+sudo install -Dm644 dist/broker.toml /etc/puckd/broker.toml
+sudo install -m644 dist/puckd-broker.socket dist/puckd-broker.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now puckd-broker.socket
+sudo install -m644 dist/72-puckd-exclusive.rules /etc/udev/rules.d/
+sudo udevadm control --reload && sudo udevadm trigger --subsystem-match=hidraw
+```
+
+Then restart puckd (no new login needed for the group). `puckd list` still says "rw ok",
+and `puckd -v` says "pass-through device" when a controller connects.
+
+To go back to the basic install, remove `/etc/udev/rules.d/72-puckd-exclusive.rules`, run
+the `udevadm` line again and restart puckd; `sudo systemctl disable --now
+puckd-broker.socket` stops the helper.
 
 ## Setup for
 
@@ -121,33 +164,6 @@ The service doesn't need `WAYLAND_DISPLAY`: without it, the overlay connects to 
 `wayland-*` socket in `$XDG_RUNTIME_DIR` and retries until the compositor is up. With
 several Wayland sessions at once, run `dbus-update-activation-environment --systemd
 WAYLAND_DISPLAY` from your compositor's startup.
-
-### Optional: exclusive mode with pass-through for Steam (experimental)
-
-By default puckd steps aside whenever Steam or an SDL game opens the controller. In
-exclusive mode only puckd can open the controller. Steam and games get a pass-through copy
-instead, which they drive as a native Steam Controller: gyro, trackpads and haptics work in
-Steam Input and its games. Steam takes the controller over, and you hand it back and forth
-by holding View + ≡ Menu for a second; games share it with puckd (see the
-[manual](docs/manual.md#exclusive-mode-pass-through)).
-
-It needs a small root helper, `puckd broker`, which opens the devices for your puckd. It is
-socket-activated: systemd starts it when puckd asks for a device, and it exits again after a
-minute. Members of the `puckd` group may use it (`/etc/puckd/broker.toml`):
-
-```sh
-sudo install -m755 target/release/puckd /usr/local/bin/      # root runs it: not from ~
-sudo groupadd -r puckd && sudo usermod -aG puckd $USER
-sudo install -Dm644 dist/broker.toml /etc/puckd/broker.toml
-sudo install -m644 dist/puckd-broker.socket dist/puckd-broker.service /etc/systemd/system/
-sudo systemctl daemon-reload && sudo systemctl enable --now puckd-broker.socket
-sudo install -m644 dist/72-puckd-exclusive.rules /etc/udev/rules.d/
-sudo udevadm control --reload && sudo udevadm trigger --subsystem-match=hidraw
-```
-
-Then restart puckd (no new login needed for the group). `puckd list` still says "rw ok"
-(through the broker), and the log says "pass-through device" when a controller connects.
-To go back, remove the udev rule and trigger again.
 
 ## Configuration
 
@@ -247,12 +263,15 @@ puckd osk-preview [PAGE]      # show the overlay without a controller
 puckd power-off [SLOT]        # turn a controller off
 ```
 
+How the parts work (Steam pass-through, the broker, protocol notes):
+[docs/internals.md](docs/internals.md).
+
 ## Known limitations
 
 - **Gyro isn't visible to SDL games**: SDL pairs the motion device with the pad through the
   evdev `uniq` string, which uinput can't set. A UHID-based (virtual DualSense) profile
   would fix it; see [PLAN.md](PLAN.md).
-- Without exclusive mode, `general.backoff = "any"` also steps aside for SDL3 games that
+- With the basic install, `general.backoff = "any"` also steps aside for SDL3 games that
   drive the controller themselves (they then get the full controller). Use `"steam"` to
-  step aside only for Steam. In exclusive mode such games share the controller instead.
+  step aside only for Steam. With the full install such games share the controller instead.
 - Not yet tested on kernel 7.3+, where the kernel's `hid-steam` handles this controller too.

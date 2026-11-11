@@ -40,6 +40,9 @@ Next:
 
 ## Pass-through mode (branch `uhid-passthrough`)
 
+How it works now: [docs/internals.md](docs/internals.md#steam-pass-through). Below: history
+and open points.
+
 Goal: puckd owns the hardware exclusively; Steam and SDL games get a byte-level clone of the
 controller, so their native Steam Controller support (gyro, trackpads, haptics) works.
 puckd keeps desktop mode, the overlay and its buttons, and decides who gets the input.

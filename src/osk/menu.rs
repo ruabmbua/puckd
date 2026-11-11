@@ -252,7 +252,7 @@ pub fn items(cfg: &Config, mode: Mode, p: &Presets, serial: Option<&str>) -> Vec
         item("general.notify", "Connect / disconnect banners", Value::Toggle(cfg.general.notify)),
         item(
             "general.passthrough",
-            "Steam and games may take over (exclusive mode)",
+            "Steam and games may take over (full install)",
             Value::Toggle(cfg.general.passthrough),
         ),
         item("defaults", "Restore default settings (not the preset)", Value::Button),
