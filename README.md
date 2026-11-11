@@ -57,11 +57,15 @@ you run several Wayland sessions at once, import the right display into systemd 
 compositor's startup, e.g.
 `dbus-update-activation-environment --systemd WAYLAND_DISPLAY`.
 
-**Hyprland**: in `~/.config/hypr/hyprland.conf`:
+**Hyprland** (0.57+, Lua config): in `~/.config/hypr/hyprland.lua`:
 
-```ini
-exec-once = puckd
+```lua
+hl.on("hyprland.start", function()
+    hl.exec_cmd("puckd")
+end)
 ```
+
+Older Hyprland (`hyprland.conf`): `exec-once = puckd`.
 
 **Sway**: in `~/.config/sway/config`:
 
@@ -86,7 +90,17 @@ click wobble). Your compositor would add its own acceleration on top (libinput's
 the **"puckd Mouse"** device to a flat profile. This affects only that virtual device,
 not your real mouse:
 
-**Hyprland** (`hyprland.conf`; `hyprctl devices` lists it as `puckd-mouse`):
+**Hyprland** (0.57+, `hyprland.lua`; `hyprctl devices` lists it as `puckd-mouse`):
+
+```lua
+hl.device({
+    name          = "puckd-mouse",
+    accel_profile = "flat",
+    sensitivity   = 0,
+})
+```
+
+Older Hyprland (`hyprland.conf`):
 
 ```ini
 device {
