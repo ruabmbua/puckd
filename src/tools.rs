@@ -261,8 +261,7 @@ pub fn osk_preview(args: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let mut cfg = crate::config::Config::default();
-    cfg.gamepad.remap.insert("l4".into(), "a".into());
+    let cfg = crate::config::Config::default();
     if args.iter().any(|a| a == "toast") {
         ov.toast(crate::osk::Toast {
             title: "Gamepad mode".into(),
@@ -277,6 +276,7 @@ pub fn osk_preview(args: &[String]) -> ExitCode {
         }
         return ExitCode::SUCCESS;
     }
+    let preview_app = std::env::var("PUCKD_PREVIEW_APP").unwrap_or_else(|_| "Elden Ring".into());
     let store = crate::presets::Presets::load(&crate::presets::default_dir(), cfg.gamepad.clone());
     ov.open("preview", Some(tab));
     ov.status(
@@ -284,7 +284,7 @@ pub fn osk_preview(args: &[String]) -> ExitCode {
         menu::status(&menu::StatusCtx {
             cfg: &cfg,
             presets: &store,
-            app: Some(("preview-app", "Preview")),
+            app: Some(("steam_app_42", &preview_app)),
             slot: "1",
             serial: Some("FXA00000000AA"),
             name: "Couch",
@@ -319,8 +319,20 @@ pub fn osk_preview(args: &[String]) -> ExitCode {
         if first {
             ov.input(&State::default(), &State::default());
             // "capture" / "list": open the mapping editor on the first entry.
-            if !matches!(tab, Tab::Keyboard | Tab::Input) {
-                st = State::default();
+            match tab {
+                // Only the two trackpad touches (LB/RB would switch tabs).
+                Tab::Keyboard => {
+                    st = State {
+                        buttons: btn::LPAD_TOUCH | btn::RPAD_TOUCH,
+                        lpad_x: st.lpad_x,
+                        lpad_y: st.lpad_y,
+                        rpad_x: st.rpad_x,
+                        rpad_y: st.rpad_y,
+                        ..Default::default()
+                    }
+                }
+                Tab::Input => {}
+                _ => st = State::default(),
             }
             for (arg, bit) in [("capture", btn::A), ("list", btn::X), ("name", btn::A)] {
                 if args.iter().any(|a| a == arg) {

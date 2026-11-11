@@ -2,6 +2,9 @@
 name = "puckd"
 version = "0.1.0"
 edition = "2024"
+license = "GPL-2.0-only"
+description = "Userspace driver for the Steam Controller (2026) and its Puck dongle: gamepad, mouse/keyboard, on-screen keyboard"
+repository = "https://github.com/ruabmbua/puckd"
 
 [dependencies]
 env_logger = "0.11.11"

@@ -1,311 +1,208 @@
 # puckd
 
 Userspace driver for the 2nd-gen Steam Controller (2026) and its "Puck" dongle
-(`28de:1304`), without Steam. Real uinput devices, so it works on any compositor
-(including native Wayland windows on Hyprland, where Steam's XTest mouse doesn't reach).
+(`28de:1304`), without Steam. It creates real input devices (uinput), so the controller
+works as a gamepad in games and as mouse and keyboard on any Wayland desktop, including
+native Wayland windows, which Steam's own desktop mode can't reach on some compositors.
 
-- **Gamepad mode**: a virtual Xbox pad per controller, with rumble.
-- **Desktop mode**: a shared virtual mouse and keyboard (trackpad pointer with
-  acceleration and inertia, trackpad/stick scrolling, configurable buttons, haptic ticks).
-- **Hold Menu (600 ms)** to switch modes. You feel a click when it switches, and a short banner shows the new mode and the hold-to-switch hint (unless the overlay is open: its header shows the mode). A short press still works as a normal button.
-- **On-screen keyboard + settings menu** (QAM button, any mode): a wlr-layer-shell overlay
-  that types into the focused window and changes the emulated controller and settings at runtime.
-- **Steps aside** when Steam or an SDL3 game with native Steam Controller support opens
-  the controller, and takes over again when it closes.
+> **Disclaimer:** this project was almost entirely "vibe coded": written by an AI coding
+> assistant (Claude) in conversation with its author, who tested it on real hardware and
+> steered the design. Treat it accordingly: it works well on the author's machine, it has
+> tests for the tricky parts, but it hasn't had a careful human code review. Use at your
+> own risk, and expect rough edges.
 
-## Setup
+License: [GPL-2.0](LICENSE).
 
-### 1. Build and install
+![On-screen keyboard and settings overlay](docs/img/keyboard.png)
+
+**[User manual](docs/manual.md)**: modes, buttons, the overlay, presets, button mapping,
+haptics, troubleshooting.
+
+## Features
+
+- **Gamepad mode**: a virtual Xbox 360, Xbox Elite 2 (with paddles) or Steam Deck-layout
+  pad per controller, with rumble. Chosen so SDL, gilrs/bevy, Wine/Proton and Steam all
+  map the buttons the same way.
+- **Desktop mode**: trackpad pointer (filtered, with acceleration; lifting your thumb or
+  clicking doesn't move it; hold the click to drag), smooth scrolling on the left pad,
+  configurable buttons and haptic ticks.
+- **Hold Menu (≡)** to switch modes, with a click and a short banner.
+- **Overlay (QAM ⋯)**: an on-screen keyboard that uses your keyboard layout, plus a
+  settings menu: presets, button mapping (press the button to map it), input test,
+  controller names, live settings.
+- **Presets** per game, optionally switched automatically when an app gets focus.
+- **Steps aside** while Steam (or an SDL3 game with native Steam Controller support) uses
+  the controller, and takes over again afterwards.
+
+## Requirements and compatibility
+
+**System**
+- Linux with `hidraw` and `uinput` (tested on kernel 7.2), and the Puck dongle `28de:1304`.
+  A wired (`28de:1302`) or Bluetooth (`28de:1303`) controller should work but is untested.
+- Read/write access to the Puck's hidraw nodes and `/dev/uinput` (the included udev rule).
+- Rust (edition 2024) to build; fontconfig and a sans font for the overlay.
+
+**Desktop**: gamepad and desktop modes only need uinput, so they work under any compositor
+(even X11 or a text console). The overlay and per-app presets need these Wayland protocols:
+
+| Feature | Wayland protocols |
+|---|---|
+| On-screen keyboard, settings, popups | `wl_compositor`, `wl_shm`, `wl_seat`, **`zwlr_layer_shell_v1`** |
+| Key labels in your layout | `wl_keyboard` keymap (any compositor) |
+| Per-app presets | **`zwlr_foreign_toplevel_manager_v1`** |
+
+| Compositor | Overlay | Per-app presets |
+|---|---|---|
+| Hyprland | yes (tested) | yes (tested) |
+| Sway, river, niri, other wlroots-style | yes (untested) | yes (untested) |
+| KDE Plasma (KWin) | yes (untested) | no |
+| GNOME (Mutter) | no (no layer-shell) | no |
+
+## Installation
 
 ```sh
-cargo install --path .          # installs ~/.cargo/bin/puckd
+cargo install --path .        # → ~/.cargo/bin/puckd (or copy target/release/puckd to ~/.local/bin)
 ```
 
-### 2. Permissions (udev)
-
-puckd runs as your user. It needs read/write access to the Puck's hidraw nodes and to
-`/dev/uinput`. The rule gives both to the logged-in user (systemd `uaccess`):
+Permissions: puckd runs as your user. The udev rule gives the logged-in user access to the
+Puck and to `/dev/uinput`:
 
 ```sh
 sudo install -m644 dist/70-puckd.rules /etc/udev/rules.d/
 sudo udevadm control --reload && sudo udevadm trigger
-puckd list                      # every slot should say "rw ok"
+puckd list                    # every slot should say "rw ok" (replug the Puck if not)
 ```
 
-Replug the Puck if `list` still reports permission errors.
+Run exactly one puckd: it drives every controller and every dongle slot.
 
-### 3. Run it with your session
+## Setup for
 
-Pick **one** of these. All of them need a single running instance: puckd drives every
-controller and every dongle slot. The gamepad and desktop modes work on any compositor.
-The on-screen keyboard and settings overlay needs wlr-layer-shell (Hyprland, Sway, river,
-niri, KDE Plasma). Per-app presets need wlr-foreign-toplevel-management (Hyprland, Sway,
-river, niri; **not** KDE, so the overlay works there but per-app switching doesn't).
+Starting puckd with your session, and turning off the desktop's pointer acceleration for
+puckd's virtual mouse (puckd shapes the pointer itself):
 
-**systemd user service** (any compositor; restarts on failure, `reload` re-reads the config):
+- [KDE Plasma](docs/setup-kde.md)
+- [Sway](docs/setup-sway.md)
+- [Hyprland](docs/setup-hyprland.md)
+
+### Alternative: systemd user service
+
+Works with any compositor; restarts on failure, and `reload` re-reads the config:
 
 ```sh
-install -Dm644 dist/puckd.service ~/.config/systemd/user/puckd.service
+install -Dm644 dist/puckd.service ~/.config/systemd/user/puckd.service   # adjust ExecStart if needed
 systemctl --user daemon-reload
 systemctl --user enable --now puckd
-journalctl --user -u puckd -f    # logs
+journalctl --user -u puckd -f
 ```
 
-The service doesn't need `WAYLAND_DISPLAY`: if it is missing, the overlay connects to the
-first `wayland-*` socket in `$XDG_RUNTIME_DIR`, and retries until the compositor is up. If
-you run several Wayland sessions at once, import the right display into systemd from your
-compositor's startup, e.g.
-`dbus-update-activation-environment --systemd WAYLAND_DISPLAY`.
+The service doesn't need `WAYLAND_DISPLAY`: without it, the overlay connects to the first
+`wayland-*` socket in `$XDG_RUNTIME_DIR` and retries until the compositor is up. With
+several Wayland sessions at once, run `dbus-update-activation-environment --systemd
+WAYLAND_DISPLAY` from your compositor's startup.
 
-**Hyprland** (0.57+, Lua config): in `~/.config/hypr/hyprland.lua`:
+## Configuration
 
-```lua
-hl.on("hyprland.start", function()
-    hl.exec_cmd("puckd")
-end)
-```
-
-Older Hyprland (`hyprland.conf`): `exec-once = puckd`.
-
-**Sway**: in `~/.config/sway/config`:
-
-```
-exec puckd
-```
-
-**KDE Plasma (Wayland)**: autostart entry:
-
-```sh
-install -Dm644 dist/puckd.desktop ~/.config/autostart/puckd.desktop
-```
-
-Or use *System Settings → Autostart → Add… → Add Application*. If `~/.cargo/bin` is not in
-the session's PATH, put the full path in `Exec=`.
-
-### 4. Turn off your desktop's pointer acceleration for puckd's mouse
-
-puckd shapes the trackpad pointer itself (filtering, acceleration, ignoring lift-off and
-click wobble). Your compositor would add its own acceleration on top (libinput's
-"adaptive" profile by default), which makes fast and slow movements unpredictable. Set
-the **"puckd Mouse"** device to a flat profile. This affects only that virtual device,
-not your real mouse:
-
-**Hyprland** (0.57+, `hyprland.lua`; `hyprctl devices` lists it as `puckd-mouse`):
-
-```lua
-hl.device({
-    name          = "puckd-mouse",
-    accel_profile = "flat",
-    sensitivity   = 0,
-})
-```
-
-Older Hyprland (`hyprland.conf`):
-
-```ini
-device {
-    name = puckd-mouse
-    accel_profile = flat
-    sensitivity = 0
-}
-```
-
-**Sway** (`swaymsg -t get_inputs` lists it as `4617:23489:puckd_Mouse`):
-
-```
-input "4617:23489:puckd_Mouse" {
-    accel_profile flat
-    pointer_accel 0
-}
-```
-
-**KDE Plasma**: *System Settings → Mouse & Touchpad → Mouse*, select **puckd Mouse**,
-and set *Pointer acceleration* to *None*. Leave *Pointer speed* in the middle.
-
-Then adjust speed and acceleration in puckd (overlay → Controller → Pointer speed /
-acceleration, or `[desktop]` in the config).
-
-### 5. Configure (optional)
-
-Most things can be changed live in the overlay (press QAM): presets, button mapping,
-pointer and scroll speed, haptics and so on. "Save settings" writes `~/.config/puckd.toml`.
-For everything else:
+Most settings can be changed live in the overlay (press QAM). For the rest, see
+[`puckd.example.toml`](puckd.example.toml):
 
 ```sh
 cp puckd.example.toml ~/.config/puckd.toml
 puckd check-config
-systemctl --user reload puckd     # or: pkill -HUP puckd
+pkill -HUP puckd              # or: systemctl --user reload puckd
 ```
-
-Files puckd uses:
 
 | Path | What |
 |---|---|
-| `~/.config/puckd.toml` | settings, the Default preset (`[gamepad]`), controller names |
+| `~/.config/puckd.toml` | settings, the Default preset (`[gamepad]`), controller names (`[names]`) |
 | `~/.config/puckd/presets/*.toml` | named presets |
 | `~/.config/puckd/app-presets.toml` | which app uses which preset |
-| `$XDG_RUNTIME_DIR/puckd/<slot>.json` | live status (name, battery, mode) for bars |
+| `$XDG_RUNTIME_DIR/puckd/<slot>.json` | live status for bars (name, serial, mode, battery) |
 
-Steam: puckd steps aside while Steam (or an SDL3 game with native Steam Controller
-support) has the controller open, and takes over again when it closes
-(`general.backoff`).
+## Usage
 
-## Gamepad profiles
+See the **[user manual](docs/manual.md)** for details and screenshots; the short version:
 
-| `gamepad.profile` | Looks like | Exposes |
-|---|---|---|
-| `xbox360` (default) | Microsoft X-Box 360 pad `045e:028e` | standard Xbox layout, rumble. Works everywhere (SDL, Wine/Proton, native evdev). |
-| `xbox-elite` | Xbox One Elite 2 pad `045e:0b00` (version `0x0407`) | plus the 4 back paddles; QAM as an extra button |
-| `extended` | Steam Deck controller as `hid-steam` presents it, `28de:1205` | plus paddles (`BTN_GRIP*`), QAM (`BTN_BASE`), trigger clicks (`BTN_TL2/TR2`), pad clicks (`BTN_THUMB/THUMB2`), analog trackpads (`ABS_HAT0*`/`ABS_HAT1*`), d-pad as buttons; extras after the Deck layout: capacitive touches (`BTN_TRIGGER_HAPPY1-6`), pad pressure (`ABS_HAT3*`), and a "… Motion Sensors" device |
-
-The identities are chosen so that devices are found in the mapping databases. That's SDL's
-built-in one and the community SDL_GameControllerDB, which gilrs/bevy and Steam's SDL use.
-For unknown devices, SDL and gilrs guess differently: SDL takes `BTN_X` as X, while gilrs
-follows the kernel spec, where the same code is North (Y). That gave swapped X/Y and dead
-triggers. Checked with SDL 3.4 and gilrs 0.11: all three profiles map face buttons,
-triggers and paddles the same way (gilrs has no paddle buttons; it reports them as
-`Unknown`). `puckd pad-preview PROFILE` creates a pad without a controller for such checks.
-
-Buttons can be remapped for any profile (`[gamepad.remap] l4 = "a"`, or the overlay's
-Button mapping page). For games that get even the standard layouts wrong, save the profile
-plus mapping as a **preset** (see below).
-
-## Desktop mode defaults
+### Desktop mode (default buttons)
 
 | Input | Action |
 |---|---|
-| right trackpad | pointer (acceleration, inertia after a flick) |
-| right pad click, RT | left click; hold the pad click (or RT) and move to drag / select text |
+| right trackpad | pointer |
+| right pad click, RT | left click; hold and move to drag / select text |
 | LT | right click |
 | left pad click, R3 | middle click |
-| left trackpad, left stick | scroll (smooth, hi-res wheel) |
+| left trackpad, left stick | scroll |
 | right stick | pointer |
 | A / B / X / Y | Enter / Esc / Backspace / Space |
 | d-pad | arrow keys |
 | LB / RB | back / forward |
-| View | Tab |
-| L3 | Super |
-| hold Menu | switch to gamepad mode |
+| View / L3 | Tab / Super |
+| hold Menu (≡) | switch to gamepad mode |
+| QAM (⋯) | overlay |
 
 Everything is rebindable in `[desktop.buttons]` (key combos like `"ctrl+w"` work too).
-Gyro mouse (while a grip is touched) is available with `desktop.gyro_mouse = true`.
+Gyro mouse while a grip is touched: `desktop.gyro_mouse = true`.
 
-## On-screen keyboard and settings
+### Gamepad profiles
 
-Press **QAM** (⋯) to open/close the overlay in any mode (`general.osk_button`). It needs a
-compositor with wlr-layer-shell (Hyprland, Sway, river, niri, ...) and never takes keyboard
-focus: keys go through puckd's virtual keyboard into the focused window. Key labels come from
-your compositor's keymap, so non-US layouts show the right characters (dead keys included).
+| `gamepad.profile` | Looks like | Exposes |
+|---|---|---|
+| `xbox360` (default) | Xbox 360 pad `045e:028e` | standard Xbox layout, rumble; works everywhere |
+| `xbox-elite` | Xbox One Elite 2 pad `045e:0b00` | plus the 4 back paddles |
+| `extended` | Steam Deck controller (`hid-steam` layout, `28de:1205`) | plus paddles, QAM, trigger and pad clicks, analog trackpads, capacitive touches, motion device |
 
-| Input | Keyboard tab |
-|---|---|
-| left / right trackpad | cursor over the left / right part of the keyboard |
-| trackpad click or LT / RT | type the key under that cursor |
-| d-pad / left stick, A | move the focus, type the focused key |
-| B / X / Y / Menu (≡) | Backspace / Space / Shift / Enter |
-| LB / RB | switch between Keyboard and Controller (the ⚙ key also opens Controller) |
+These identities are the ones SDL's and the community mapping database already know, so
+SDL and gilrs agree on X/Y, triggers and paddles. With the Xbox profiles, the trackpads
+still move the mouse in gamepad mode ("Trackpads as mouse", per preset, on by default).
 
-Shift, Ctrl, Alt, Super and AltGr are sticky: tap once for the next key, twice to lock.
-You can also click keys with a mouse. QAM always belongs to the overlay while puckd drives
-the controller; it never reaches games.
+### Overlay (QAM)
 
-The **Controller** tab shows battery and mode, and has three sections:
+The overlay never takes keyboard focus (except while you type a name): keys go through
+puckd's virtual keyboard into the focused window.
 
-- **Preset (how games see the controller)**: the active preset, the button mapping, and
-  the emulated controller, motion device, rumble strength and motor swap. Also
-  "Trackpads as mouse in gamepad mode" (on by default): the Xbox profiles have no
-  trackpads, so in gamepad mode the right pad still moves the pointer and the left pad
-  scrolls, with your desktop settings. Pad clicks keep their desktop bindings unless the
-  button mapping uses them. Changing the
-  profile replaces the virtual pad (games see an unplug and a replug).
-- **Settings (shared by all presets)**: mode, pointer speed/acceleration/inertia, scroll
-  speed and direction, gyro mouse, haptics, and when to step aside. Switching presets
-  never changes these. "Restore default settings" resets them (not the preset, not the
-  current mode). "Save settings" writes them to `puckd.toml`, keeping comments and other keys.
-- **Tools**: the input test, and "Turn off controller".
+**Keyboard tab**: each trackpad moves a cursor over its half of the keyboard; a pad click or
+LT/RT types the key under it. Or move the focus with the d-pad and press A. B / X / Y / ≡
+are Backspace / Space / Shift / Enter. Modifiers are sticky (tap once for the next key,
+twice to lock). LB/RB switch to the Controller tab.
 
-The top right shows the controller's name, the active preset, the mode and the battery.
-**Controller names** (in Settings) are keyed by the controller's own serial number, so a
-name follows the controller to whichever dongle slot it connects to. Names are saved right
-away into `[names]` in `puckd.toml` and also show up in the logs and the status files.
+**Controller tab**, in three sections:
+- *Preset* (how games see the controller): the active preset, button mapping, emulated
+  controller, motion device, rumble, trackpads as mouse in gamepad mode.
+- *Settings* (shared by all presets): controller name, mode, pointer and scroll, gyro mouse,
+  haptics, stepping aside. "Save settings" writes `puckd.toml`.
+- *Tools*: input test, turn off controller.
 
-D-pad up/down selects, left/right or A changes, B goes back.
+Sub-pages (B goes back):
+- **Presets**: "Default" is `puckd.toml`'s `[gamepad]` and never gets a button mapping.
+  Changes show as "X (modified)"; save them to X or as a new preset (named with the
+  keyboard, pre-filled from the focused app). Under *Apps*, tie the preset to the focused
+  app. When that app gets focus, a popup asks: **A** always for this session, **X** once,
+  **B** no. Leaving the app returns to the preset you last chose by hand.
+- **Button mapping**: on an entry, **A** waits for the button it should act as (5 s), **X**
+  opens a picker, **Y** resets it.
+- **Input test**: everything the controller sends, live. LB + RB together go back.
 
-**Presets** page:
+Closing and reopening the overlay brings you back to the same page.
 
-- **Default** always exists. It is the `[gamepad]` section of `puckd.toml` and its button
-  mapping is never changed from the overlay. Changing other preset values while on Default
-  offers "Save changes as Default". Changing a button mapping turns the settings into a
-  "new preset (unsaved)", which can only be saved under a new name.
-- Named presets live in `~/.config/puckd/presets/<name>.toml`. Once you change something,
-  the page shows "X (modified)" and offers "Save changes to X", "Save as new preset…" and
-  "Discard changes". "Rename…" and "Delete" are there too.
-- **Names** are typed with the overlay keyboard or a real keyboard: a name field replaces
-  the tab bar, and keys go into the field instead of the focused app. The overlay holds
-  keyboard focus only while the field is open. ≡ or Enter saves, Esc cancels, and B or
-  Backspace deletes a character. The field starts with a suggestion from the focused window: its title for
-  Steam games, otherwise the app id (`org.mozilla.firefox` → `firefox`).
-- **Per-app presets**: "Use X for <app>" ties the active preset to the focused window's
-  Wayland app_id (Steam games under XWayland are `steam_app_<id>`). Focusing that app then
-  shows a popup at the bottom of the screen (above the overlay if it is open), "Allow
-  switching to preset X for <app>?" with **A: always for this session** (it then switches automatically
-  whenever you come back to that app, until puckd restarts), **X: once** (asks again
-  next time) and **B: no** (doesn't ask again this session). It closes on its own after
-  10 s without remembering anything. While it shows, A, X and B go to the popup only, an
-  open overlay gets no input at all, and the answering press doesn't reach anything else.
-  Leaving the app returns to the preset you last chose by hand, unless you have unsaved
-  changes. `general.preset_switch = "auto"` switches without asking, `"off"` never.
-  This needs wlr-foreign-toplevel-management (Hyprland, Sway, river, niri, ...); the
-  associations live in `~/.config/puckd/app-presets.toml`.
-
-The other two sub-pages:
-
-- **Button mapping**: for each physical button, what it acts as in gamepad mode (itself,
-  nothing, or another button). Changes apply live without recreating the pad. On an
-  entry, **A** waits for you to press the button it should act as. Any button counts,
-  including A, B and the d-pad; with no press for 5 s it cancels. **X** opens a list of all
-  targets to pick from, and **Y** resets the entry.
-
-The overlay remembers where you were: closing it with QAM and opening it again brings you
-back to the same page and entry. So you can switch between a game and, say, the button
-mapping page while you tune it.
-- **Input test**: a live view of everything the controller sends (buttons, sticks with
-  touch, triggers with full-pull click, trackpads with touch position, pressure and click,
-  grips, accelerometer, gyro), for testing the hardware. All buttons are shown there
-  instead of acting, so **LB + RB together** go back. QAM can't be tested there because it
-  always toggles the overlay.
-
-If the daemon runs as a systemd user service without `WAYLAND_DISPLAY`, it uses the first
-`wayland-*` socket in `$XDG_RUNTIME_DIR`. `puckd osk-preview [settings|mapping|presets|input]
-[prompt|capture|list|name]` shows the overlay without a controller.
-
-## Diagnostics
+## Diagnostics and tools
 
 ```sh
-puckd list                      # slots and permissions
-puckd dump [1]                  # decoded input (add --raw or --imu); lizard mode is off meanwhile
-puckd haptic-test               # plays each rumble/haptic effect with a description
-puckd power-off [SLOT]          # turns a controller off
-puckd -v                        # debug logging
+puckd list                    # slots and permissions
+puckd dump [SLOT]             # decoded input (--raw, --imu)
+puckd -v                      # debug logging
+puckd haptic-test             # play each rumble/haptic effect
+puckd haptic-sides            # answer with LB/RB where each haptic side is felt
+puckd mouse-study             # guided trackpad recording (stop the running puckd first)
+puckd replay DIR              # replay a recording through the current pointer code
+puckd pad-preview PROFILE     # create a virtual pad without a controller
+puckd osk-preview [PAGE]      # show the overlay without a controller
+puckd power-off [SLOT]        # turn a controller off
 ```
-
-Tuning the trackpad mouse: `puckd mouse-study` walks you through short tasks (resting,
-sweeps, flicks, precise moves, clicks, scrolling) and records the raw trackpad data, what
-puckd emitted, and where the cursor actually went (Hyprland). `puckd replay <dir>`
-replays such a recording through the current code and prints per-task numbers (drift,
-movement after lifting, movement around clicks), so tuning changes can be compared on the
-same input.
-
-Status for bars: `$XDG_RUNTIME_DIR/puckd/<slot>.json` (name, serial, connected, mode, battery, charge state).
 
 ## Known limitations
 
-- **Gyro isn't visible to SDL games.** SDL pairs a "Motion Sensors" device with its pad
-  through the evdev `uniq` string, and uinput can't set `uniq`. The device is there for raw
-  evdev readers. The fix is a UHID-based profile (e.g. a virtual DualSense, so `hid-playstation`
-  creates the pad, motion sensors and touchpad with a proper `uniq`). See PLAN.md.
-- `backoff = "any"` also steps aside for SDL3 games that drive the controller natively
-  (they then get the full controller through SDL). Use `"steam"` to step aside only for Steam.
-- Not yet tested on kernel 7.3+, where `hid-steam` handles the controller too. For the
-  older controllers `hid-steam` goes quiet while a hidraw client has the device open,
-  which would prevent double input. Check it with `evtest` once 7.3 is here.
+- **Gyro isn't visible to SDL games**: SDL pairs the motion device with the pad through the
+  evdev `uniq` string, which uinput can't set. A UHID-based (virtual DualSense) profile
+  would fix it; see [PLAN.md](PLAN.md).
+- `general.backoff = "any"` also steps aside for SDL3 games that drive the controller
+  themselves (they then get the full controller). Use `"steam"` to step aside only for Steam.
+- Not yet tested on kernel 7.3+, where the kernel's `hid-steam` handles this controller too.
