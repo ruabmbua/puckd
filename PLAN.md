@@ -17,7 +17,8 @@ Goal: without Steam,
 Implemented: milestones 1–7 plus rumble, paddles/touches (extended profile), motion device,
 trackpad haptics, battery status files and the config file with SIGHUP reload. See README.md.
 
-Verified on hardware (Puck, kernel 7.2): bit 0x40 is the right center button (≡, named
+Verified on hardware (Puck, kernel 7.2): haptic sides are 0 = left, 1 = right, 2 = both
+(3 = nothing; tick and click both work); bit 0x40 is the right center button (≡, named
 `menu` here, Start) and 0x4000 the left one (`view`, Back), the reverse of SDL's bit names; slot discovery (interfaces 2..5; interface 6 excluded
 by its report descriptor), report decoding (0x42), battery (0x43), lizard off, uinput FF upload →
 40 ms rumble resend → stop, all haptic output reports accepted, SDL 3.4 mappings for all three
@@ -25,7 +26,6 @@ profiles (paddles included), back-off when an SDL3 HIDAPI client opens the Puck,
 
 Needs a human with the controller in hand:
 - that the Puck's own mouse/keyboard evdev nodes stay quiet (lizard off)
-- `puckd haptic-test`: which haptic sides/commands are felt (side 1/2/3 assumption)
 - trackpad feel: pointer speed/accel, scroll direction, gyro-mouse axes and signs
 - wireless disconnect/connect (0x79) on controller sleep/wake
 

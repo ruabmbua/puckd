@@ -157,7 +157,7 @@ pub fn dump(args: &[String]) -> ExitCode {
 }
 
 /// Find the first slot that is sending state reports.
-fn active_slot(filter: Option<&str>) -> Option<HidDevice> {
+pub(crate) fn active_slot(filter: Option<&str>) -> Option<HidDevice> {
     let mut devs: Vec<HidDevice> = pick(filter).iter().filter_map(|i| HidDevice::open(i).ok()).collect();
     let end = Instant::now() + Duration::from_secs(2);
     let mut buf = [0u8; 64];
@@ -412,4 +412,100 @@ pub fn power_off(args: &[String]) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// Find out how the controller numbers its haptic sides: plays a tick and a click for each
+/// raw side value; the user answers with the controller (LB left, RB right, both, A none).
+pub fn haptic_sides(args: &[String]) -> ExitCode {
+    use std::io::Write as _;
+    let filter = args.iter().find(|a| !a.starts_with('-')).map(String::as_str);
+    let Some(mut d) = active_slot(filter) else {
+        eprintln!("no connected controller found (is it on?)");
+        return ExitCode::FAILURE;
+    };
+    sys::install_signal_handlers();
+    let lizard = proto::settings_report(&[(proto::SETTING_LIZARD_MODE, proto::LIZARD_MODE_OFF)]);
+    let _ = d.set_feature(&lizard);
+    let mut last_keepalive = Instant::now();
+    let mut buf = [0u8; 64];
+    // Read pending reports; returns the latest buttons seen.
+    let mut poll_buttons = |d: &mut HidDevice, wait: Duration, last_keepalive: &mut Instant| -> Option<u32> {
+        if last_keepalive.elapsed() >= Duration::from_secs(2) {
+            let _ = d.set_feature(&lizard);
+            *last_keepalive = Instant::now();
+        }
+        let _ = sys::poll(&[d.fd()], Some(wait));
+        let mut b = None;
+        while let Ok(Some(n)) = d.read_report(&mut buf) {
+            if let Some(Input::State(st)) = proto::parse(&buf[..n]) {
+                b = Some(st.buttons);
+            }
+        }
+        b
+    };
+    println!("Hold the controller with both thumbs resting on the trackpads.");
+    println!("After each effect, answer where you felt it:");
+    println!("   LB = left pad    RB = right pad    LB + RB together = both    A = nothing\n");
+    let tests: Vec<(u8, u8, &str)> = (0u8..=3).flat_map(|side| [(side, 1u8, "TICK"), (side, 2u8, "CLICK")]).collect();
+    let mut results: Vec<(u8, &str, String)> = Vec::new();
+    let answer_keys = btn::LB | btn::RB | btn::A;
+    for (n, &(side, cmd, name)) in tests.iter().enumerate() {
+        if sys::quit_requested() {
+            break;
+        }
+        println!("── Test {}/{}: side value {side} · {name} ──", n + 1, tests.len());
+        // Play the effect three times.
+        for k in (1..=3).rev() {
+            print!("\r   playing… {k} ");
+            let _ = std::io::stdout().flush();
+            let _ = d.write_output(&[proto::OUT_HAPTIC_COMMAND, side, cmd, 0]);
+            let end = Instant::now() + Duration::from_millis(450);
+            while Instant::now() < end {
+                poll_buttons(&mut d, Duration::from_millis(20), &mut last_keepalive);
+            }
+        }
+        // Wait for a chord of LB / RB / A: collect everything pressed until all are released.
+        let deadline = Instant::now() + Duration::from_secs(8);
+        let mut chord = 0u32;
+        let mut prev = 0u32;
+        let mut answer = String::from("no answer");
+        let mut shown = u64::MAX;
+        while Instant::now() < deadline && !sys::quit_requested() {
+            let left = deadline.saturating_duration_since(Instant::now()).as_secs() + 1;
+            if left != shown {
+                print!("\r   where did you feel it?  LB=left  RB=right  LB+RB=both  A=nothing   {left} s ");
+                let _ = std::io::stdout().flush();
+                shown = left;
+            }
+            let Some(b) = poll_buttons(&mut d, Duration::from_millis(20), &mut last_keepalive) else { continue };
+            let b = b & answer_keys;
+            chord |= b;
+            if b == 0 && prev != 0 {
+                answer = if chord & btn::A != 0 {
+                    "nothing".into()
+                } else if chord & btn::LB != 0 && chord & btn::RB != 0 {
+                    "BOTH".into()
+                } else if chord & btn::LB != 0 {
+                    "LEFT".into()
+                } else {
+                    "RIGHT".into()
+                };
+                break;
+            }
+            prev = b;
+        }
+        println!("\r   → {answer:<70}");
+        results.push((side, name, answer));
+        sleep(Duration::from_millis(400));
+    }
+    let _ = d.set_feature(&proto::settings_report(&[(proto::SETTING_LIZARD_MODE, proto::LIZARD_MODE_ON)]));
+    println!("\nSummary (side value → where it was felt):");
+    println!("   {:<6} {:<10} {:<10}", "value", "TICK", "CLICK");
+    for side in 0u8..=3 {
+        let get =
+            |name: &str| results.iter().find(|r| r.0 == side && r.1 == name).map(|r| r.2.clone()).unwrap_or_default();
+        println!("   {:<6} {:<10} {:<10}", side, get("TICK"), get("CLICK"));
+    }
+    println!("\nPaste this table to Claude.");
+    ExitCode::SUCCESS
 }

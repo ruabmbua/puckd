@@ -13,6 +13,7 @@ mod osk;
 mod presets;
 mod proto;
 mod status;
+mod study;
 mod sys;
 mod tools;
 mod uinput;
@@ -32,6 +33,8 @@ USAGE:
                                      while dumping unless --keep-lizard is given
     puckd haptic-test [SLOT]         play each rumble/haptic effect, with a description
     puckd power-off [SLOT]           turn a controller off
+    puckd haptic-sides [SLOT]        play tick/click on each raw haptic side value (0..3)
+    puckd mouse-study                guided recording session for tuning the trackpad mouse
     puckd osk-preview [settings|mapping|presets|input] [prompt|capture|list|name|toast] [SECS]
                                      show the on-screen keyboard overlay without a controller
     puckd pad-preview [PROFILE] [SECS]
@@ -114,6 +117,21 @@ fn main() -> ExitCode {
         }
         "haptic-test" => tools::haptic_test(&rest),
         "power-off" => tools::power_off(&rest),
+        "haptic-sides" => tools::haptic_sides(&rest),
+        "replay" => match load() {
+            Ok(c) => study::replay(c, &rest),
+            Err(e) => {
+                eprintln!("config error: {e}");
+                ExitCode::from(2)
+            }
+        },
+        "mouse-study" => match load() {
+            Ok(c) => study::run(c, &rest),
+            Err(e) => {
+                eprintln!("config error: {e}");
+                ExitCode::from(2)
+            }
+        },
         "pad-preview" => {
             sys::install_signal_handlers();
             tools::pad_preview(&rest)

@@ -43,16 +43,18 @@ trackpad_mouse = true      # Xbox profiles: trackpads still move the mouse / scr
 pointer_speed = 1.0
 pointer_accel = 1.0
 smoothing = 0.4            # 0..0.95
-inertia = true
+inertia = false            # glide after a quick flick (short, fast touches only)
 inertia_friction = 6.0
 scroll_speed = 1.0
+scroll_accel = 1.0         # faster scrolling for fast swipes (0 = linear)
+liftoff_delay_ms = 12      # hold trackpad output back so lifting the thumb doesn't move the pointer
 natural_scroll = false
 horizontal_scroll = true
 stick_pointer_speed = 1200.0   # right stick, px/s at full tilt (0 = off)
 stick_scroll_speed = 5.0       # left stick, wheel notches/s at full tilt (0 = off)
 stick_deadzone = 0.15
 trigger_threshold = 0.45
-click_suppress_ms = 60
+click_suppress_ms = 150     # pointer stays put around trackpad clicks
 gyro_mouse = false             # gyro moves the pointer while a grip is touched
 gyro_speed = 12.0              # px per degree
 

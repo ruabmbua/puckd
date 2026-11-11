@@ -155,6 +155,11 @@ pub struct Desktop {
     pub inertia_friction: f32,
     /// Left trackpad scroll speed multiplier.
     pub scroll_speed: f32,
+    /// Extra scroll speed for fast swipes on the left trackpad (0 = linear).
+    pub scroll_accel: f32,
+    /// Trackpad output is held back this long so the thumb rolling off the pad when
+    /// lifting doesn't move the pointer (0 = off, lowest latency).
+    pub liftoff_delay_ms: u64,
     pub natural_scroll: bool,
     pub horizontal_scroll: bool,
     /// Right stick pointer speed in px/s at full deflection (0 = off).
@@ -181,16 +186,18 @@ impl Default for Desktop {
             pointer_speed: 1.0,
             pointer_accel: 1.0,
             smoothing: 0.4,
-            inertia: true,
+            inertia: false,
             inertia_friction: 6.0,
             scroll_speed: 1.0,
+            scroll_accel: 1.0,
+            liftoff_delay_ms: 12,
             natural_scroll: false,
             horizontal_scroll: true,
             stick_pointer_speed: 1200.0,
             stick_scroll_speed: 5.0,
             stick_deadzone: 0.15,
             trigger_threshold: 0.45,
-            click_suppress_ms: 60,
+            click_suppress_ms: 150,
             gyro_mouse: false,
             gyro_speed: 12.0,
             buttons: BTreeMap::new(),

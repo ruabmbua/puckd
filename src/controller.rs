@@ -42,7 +42,8 @@ pub struct Slot {
     last_keepalive: Option<Instant>,
     rumble_sent: (u16, u16),
     last_rumble: Option<Instant>,
-    last_tick: Option<Instant>,
+    /// Last tick per pad (index = Side value), so both pads can tick independently.
+    last_tick: [Option<Instant>; 4],
     battery: Option<(u8, u8)>,
     backed_off: bool,
     last_state: Option<State>,
@@ -82,7 +83,7 @@ impl Slot {
             last_keepalive: None,
             rumble_sent: (0, 0),
             last_rumble: None,
-            last_tick: None,
+            last_tick: [None; 4],
             battery: None,
             backed_off: false,
             last_state: None,
@@ -190,10 +191,11 @@ impl Slot {
             return;
         }
         let now = Instant::now();
-        if !click && self.last_tick.is_some_and(|t| now.duration_since(t) < MIN_TICK_GAP) {
+        let i = side as usize;
+        if !click && self.last_tick[i].is_some_and(|t| now.duration_since(t) < MIN_TICK_GAP) {
             return;
         }
-        self.last_tick = Some(now);
+        self.last_tick[i] = Some(now);
         let cmd = if click { HapticCmd::Click } else { HapticCmd::Tick };
         self.haptic(&proto::haptic_command_report(side, cmd, cfg.haptics.gain_db));
     }
@@ -259,17 +261,18 @@ impl Slot {
         if !h.enabled {
             return;
         }
-        if matches!(f, Feedback::PointerTick | Feedback::ScrollTick)
-            && self.last_tick.is_some_and(|t| now.duration_since(t) < MIN_TICK_GAP)
-        {
+        let (side, cmd) = match f {
+            Feedback::PointerTick => (Side::Right, HapticCmd::Tick),
+            Feedback::ScrollTick => (Side::Left, HapticCmd::Tick),
+            Feedback::Click(side) => (side, HapticCmd::Click),
+            Feedback::Release(side) => (side, HapticCmd::Tick),
+        };
+        let i = side as usize;
+        if matches!(cmd, HapticCmd::Tick) && self.last_tick[i].is_some_and(|t| now.duration_since(t) < MIN_TICK_GAP) {
             return;
         }
-        self.last_tick = Some(now);
-        let r = match f {
-            Feedback::PointerTick => proto::haptic_command_report(Side::Right, HapticCmd::Tick, h.gain_db),
-            Feedback::ScrollTick => proto::haptic_command_report(Side::Left, HapticCmd::Tick, h.gain_db),
-            Feedback::Click => proto::haptic_command_report(Side::Both, HapticCmd::Click, h.gain_db),
-        };
+        self.last_tick[i] = Some(now);
+        let r = proto::haptic_command_report(side, cmd, h.gain_db);
         self.haptic(&r);
     }
 
@@ -362,7 +365,7 @@ impl Slot {
         info!("{}: {:?} mode", self.label(), self.mode);
         if cfg.haptics.enabled && cfg.haptics.mode_switch {
             self.haptic(&proto::haptic_command_report(Side::Both, HapticCmd::Click, cfg.haptics.gain_db));
-            self.last_tick = Some(now);
+            self.last_tick = [Some(now); 4];
         }
         self.write_status();
     }

@@ -78,7 +78,40 @@ install -Dm644 dist/puckd.desktop ~/.config/autostart/puckd.desktop
 Or use *System Settings → Autostart → Add… → Add Application*. If `~/.cargo/bin` is not in
 the session's PATH, put the full path in `Exec=`.
 
-### 4. Configure (optional)
+### 4. Turn off your desktop's pointer acceleration for puckd's mouse
+
+puckd shapes the trackpad pointer itself (filtering, acceleration, ignoring lift-off and
+click wobble). Your compositor would add its own acceleration on top (libinput's
+"adaptive" profile by default), which makes fast and slow movements unpredictable. Set
+the **"puckd Mouse"** device to a flat profile. This affects only that virtual device,
+not your real mouse:
+
+**Hyprland** (`hyprland.conf`; `hyprctl devices` lists it as `puckd-mouse`):
+
+```ini
+device {
+    name = puckd-mouse
+    accel_profile = flat
+    sensitivity = 0
+}
+```
+
+**Sway** (`swaymsg -t get_inputs` lists it as `4617:23489:puckd_Mouse`):
+
+```
+input "4617:23489:puckd_Mouse" {
+    accel_profile flat
+    pointer_accel 0
+}
+```
+
+**KDE Plasma**: *System Settings → Mouse & Touchpad → Mouse*, select **puckd Mouse**,
+and set *Pointer acceleration* to *None*. Leave *Pointer speed* in the middle.
+
+Then adjust speed and acceleration in puckd (overlay → Controller → Pointer speed /
+acceleration, or `[desktop]` in the config).
+
+### 5. Configure (optional)
 
 Most things can be changed live in the overlay (press QAM): presets, button mapping,
 pointer and scroll speed, haptics and so on. "Save settings" writes `~/.config/puckd.toml`.
@@ -128,7 +161,7 @@ plus mapping as a **preset** (see below).
 | Input | Action |
 |---|---|
 | right trackpad | pointer (acceleration, inertia after a flick) |
-| right pad click, RT | left click |
+| right pad click, RT | left click; hold the pad click (or RT) and move to drag / select text |
 | LT | right click |
 | left pad click, R3 | middle click |
 | left trackpad, left stick | scroll (smooth, hi-res wheel) |
@@ -241,6 +274,13 @@ puckd haptic-test               # plays each rumble/haptic effect with a descrip
 puckd power-off [SLOT]          # turns a controller off
 puckd -v                        # debug logging
 ```
+
+Tuning the trackpad mouse: `puckd mouse-study` walks you through short tasks (resting,
+sweeps, flicks, precise moves, clicks, scrolling) and records the raw trackpad data, what
+puckd emitted, and where the cursor actually went (Hyprland). `puckd replay <dir>`
+replays such a recording through the current code and prints per-task numbers (drift,
+movement after lifting, movement around clicks), so tuning changes can be compared on the
+same input.
 
 Status for bars: `$XDG_RUNTIME_DIR/puckd/<slot>.json` (name, serial, connected, mode, battery, charge state).
 

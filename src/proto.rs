@@ -26,12 +26,14 @@ pub const OUT_HAPTIC_RUMBLE: u8 = 0x80;
 pub const OUT_HAPTIC_PULSE: u8 = 0x81;
 pub const OUT_HAPTIC_COMMAND: u8 = 0x82;
 
-/// Haptic actuator selection for 0x81/0x82.
+/// Haptic actuator selection for 0x81/0x82. Measured on the 2026 controller with
+/// `puckd haptic-sides`: 0 = left, 1 = right, 2 = both, 3 = nothing (the 2015 controller
+/// used 1/2/3, as SDL's headers note).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Side {
-    Left = 1,
-    Right = 2,
-    Both = 3,
+    Left = 0,
+    Right = 1,
+    Both = 2,
 }
 
 /// Haptic command types for 0x82 (`haptic_type_t`).
@@ -308,6 +310,13 @@ mod tests {
         assert_eq!((s.lx, s.ly), (0x018f, 0x0208));
         assert_eq!(s.imu_tick, 0x6e4e_2862);
         assert_eq!(s.accel[0], 0xfda4u16 as i16);
+    }
+
+    #[test]
+    fn haptic_sides() {
+        assert_eq!(haptic_command_report(Side::Left, HapticCmd::Click, 0), [0x82, 0, 2, 0]);
+        assert_eq!(haptic_command_report(Side::Right, HapticCmd::Tick, -6), [0x82, 1, 1, 0xfa]);
+        assert_eq!(haptic_command_report(Side::Both, HapticCmd::Click, 0)[1], 2);
     }
 
     #[test]
