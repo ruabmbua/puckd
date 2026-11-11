@@ -259,6 +259,7 @@ impl Slot {
         self.toast = Some(osk::Toast {
             title: format!("{who} has {}", self.which()),
             line: osk::ToastLine::Text(format!("Hold {} for puckd", chord_label(cfg))),
+            secs: osk::Toast::LONG,
         });
         self.taken_by = Some(who);
         self.write_status();
@@ -286,6 +287,7 @@ impl Slot {
             self.toast = Some(osk::Toast {
                 title: "Steam and games may take it".into(),
                 line: osk::ToastLine::Text(format!("Hold {} to keep it in puckd", chord_label(cfg))),
+                secs: osk::Toast::LONG,
             });
         } else {
             self.held = true;
@@ -294,6 +296,7 @@ impl Slot {
             self.toast = Some(osk::Toast {
                 title: format!("puckd has {}", self.which()),
                 line: osk::ToastLine::Text(format!("Hold {} to hand it to Steam", chord_label(cfg))),
+                secs: osk::Toast::LONG,
             });
         }
     }
@@ -321,6 +324,7 @@ impl Slot {
             self.toast = Some(osk::Toast {
                 title: format!("puckd has {}", self.which()),
                 line: osk::ToastLine::Text(format!("{who} let go")),
+                secs: osk::Toast::LONG,
             });
             self.give_back(cfg);
         }
@@ -462,6 +466,7 @@ impl Slot {
                 self.toast = Some(osk::Toast {
                     title: format!("{} connected", self.display_name()),
                     line: osk::ToastLine::Text(mode.into()),
+                    secs: osk::Toast::NORMAL,
                 });
             }
         }
@@ -481,7 +486,11 @@ impl Slot {
                 Some((_, level)) => format!("Battery {level} %"),
                 None => String::new(),
             };
-            self.toast = Some(osk::Toast { title: format!("{name} disconnected"), line: osk::ToastLine::Text(line) });
+            self.toast = Some(osk::Toast {
+                title: format!("{name} disconnected"),
+                line: osk::ToastLine::Text(line),
+                secs: osk::Toast::NORMAL,
+            });
         }
     }
 

@@ -259,6 +259,7 @@ impl Daemon {
             self.osk.toast(osk::Toast {
                 title: title.into(),
                 line: osk::ToastLine::Hold { who, glyph: glyph.clone(), next: next.into() },
+                secs: osk::Toast::SHORT,
             });
         }
     }

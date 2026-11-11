@@ -191,6 +191,7 @@ impl Demo {
                         glyph: "≡".into(),
                         next: pipe.get(2).unwrap_or(&"").to_string(),
                     },
+                    secs: osk::Toast::SHORT,
                 })
             }
             "mode" => self.mode = if args.first() == Some(&"gamepad") { Mode::Gamepad } else { Mode::Desktop },

@@ -67,6 +67,9 @@ take-over detection (first output/feature request from a client; the holder's na
 (hidden from puckd and the clone, single presses held back 80 ms), config `passthrough` /
 `handover_buttons`, banners. Open: Steam's settings that outlive its take-over (trackpad
 modes?), BLE-linked controllers through the wired persona, kernel 7.3 hid-steam.
+Later: the broker's allow list moves to a global `/etc/puckd.toml` (or similar): a group
+(e.g. `puckd`, added to the user as a supplementary group) as the main mechanism, plus an
+optional user list; then the unit needs no `%i`.
 
 Original plan:
 1. In the daemon: one wired-persona clone per *connected* controller (any link), created

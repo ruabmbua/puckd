@@ -47,7 +47,6 @@ use smithay_client_toolkit::reexports::protocols_wlr::foreign_toplevel::v1::clie
 };
 
 const BTN_LEFT: u32 = 0x110;
-const TOAST_TIME: std::time::Duration = std::time::Duration::from_millis(1600);
 
 pub fn run(rx: cchan::Channel<Cmd>, sink: EventSink) {
     if let Err(e) = run_inner(rx, &sink) {
@@ -232,9 +231,9 @@ impl App {
             }
             Cmd::Status(s) => self.model.set_status(s),
             Cmd::Toast(t) => {
+                self.toast_until = Some(Instant::now() + std::time::Duration::from_secs_f32(t.secs.max(0.5)));
                 self.toast_data = Some(t);
                 self.toast_dirty = true;
-                self.toast_until = Some(Instant::now() + TOAST_TIME);
             }
             Cmd::Prompt(text) => {
                 if text.is_none() {

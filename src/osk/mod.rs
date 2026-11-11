@@ -145,6 +145,17 @@ pub struct Status {
 pub struct Toast {
     pub title: String,
     pub line: ToastLine,
+    /// How long it stays up.
+    pub secs: f32,
+}
+
+impl Toast {
+    /// Mode switch: glanced at, gone quickly.
+    pub const SHORT: f32 = 1.6;
+    /// Connect / disconnect.
+    pub const NORMAL: f32 = 3.0;
+    /// Carries an instruction to read (the hand-over chord).
+    pub const LONG: f32 = 6.0;
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -275,6 +275,7 @@ pub fn osk_preview(args: &[String]) -> ExitCode {
         ov.toast(crate::osk::Toast {
             title: "Gamepad mode".into(),
             line: crate::osk::ToastLine::Hold { who: "Couch".into(), glyph: "≡".into(), next: "desktop mode".into() },
+            secs: crate::osk::Toast::SHORT,
         });
         let end = Instant::now() + Duration::from_secs(secs);
         while Instant::now() < end && !sys::quit_requested() {
