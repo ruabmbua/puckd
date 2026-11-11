@@ -133,6 +133,35 @@ fn iface_from_phys(phys: &str) -> Option<u8> {
     phys.rsplit_once("/input").and_then(|(_, n)| n.parse().ok())
 }
 
+/// `phys` prefix of puckd's own virtual devices (pass-through clones, uinput devices).
+pub const OWN_PHYS_PREFIX: &str = "puckd/";
+
+fn is_supported(vid: u16, pid: u16) -> bool {
+    vid == VALVE_VID && matches!(pid, PID_TRITON_USB | PID_TRITON_BLE | PID_PROTEUS_DONGLE | PID_NEREID_DONGLE)
+}
+
+/// Whether `node` (e.g. "hidraw11") is a real Steam Controller or Puck node (any interface),
+/// not one of puckd's own pass-through clones.
+pub fn is_controller_node(node: &str) -> bool {
+    let Ok(uevent) = fs::read_to_string(Path::new("/sys/class/hidraw").join(node).join("device/uevent")) else {
+        return false;
+    };
+    let (id, _, phys, _) = parse_uevent(&uevent);
+    id.is_some_and(|(_, v, p)| is_supported(v, p)) && !phys.starts_with(OWN_PHYS_PREFIX)
+}
+
+/// The hidraw node (e.g. "hidraw20") of the HID device with this `phys`.
+pub fn node_by_phys(phys: &str) -> Option<String> {
+    for e in fs::read_dir("/sys/class/hidraw").ok()?.flatten() {
+        if let Ok(u) = fs::read_to_string(e.path().join("device/uevent"))
+            && parse_uevent(&u).2 == phys
+        {
+            return Some(e.file_name().to_string_lossy().into_owned());
+        }
+    }
+    None
+}
+
 /// Find all hidraw nodes that carry Steam Controller (Triton) state reports.
 pub fn scan() -> Vec<HidInfo> {
     let mut out = Vec::new();
@@ -142,8 +171,8 @@ pub fn scan() -> Vec<HidInfo> {
         let sys = e.path();
         let Ok(uevent) = fs::read_to_string(sys.join("device/uevent")) else { continue };
         let (Some((bus, vid, pid)), uniq, phys, name) = parse_uevent(&uevent) else { continue };
-        if vid != VALVE_VID || !matches!(pid, PID_TRITON_USB | PID_TRITON_BLE | PID_PROTEUS_DONGLE | PID_NEREID_DONGLE)
-        {
+        // Not our own pass-through clones (they look like wired controllers).
+        if !is_supported(vid, pid) || phys.starts_with(OWN_PHYS_PREFIX) {
             continue;
         }
         let iface = iface_from_phys(&phys);
@@ -166,6 +195,9 @@ pub fn scan() -> Vec<HidInfo> {
 pub struct HidDevice {
     file: File,
     pub info: HidInfo,
+    /// Opened through `puckd broker` because the user may not open the node: nothing else
+    /// running as the user (Steam, games) can open it either, so puckd has it exclusively.
+    pub exclusive: bool,
 }
 
 const fn hidiocsfeature(len: usize) -> u64 {
@@ -175,14 +207,50 @@ const fn hidiocgfeature(len: usize) -> u64 {
     sys::ioc(sys::IOC_WRITE | sys::IOC_READ, b'H', 0x07, len)
 }
 
+/// HIDIOC{S,G}{INPUT,OUTPUT,FEATURE} by uhid report type (0 feature, 1 output, 2 input).
+const fn hidioc_report(get: bool, rtype: u8, len: usize) -> u64 {
+    let nr = match (get, rtype) {
+        (false, 2) => 0x09,
+        (true, 2) => 0x0a,
+        (false, 1) => 0x0b,
+        (true, 1) => 0x0c,
+        (false, _) => 0x06,
+        (true, _) => 0x07,
+    };
+    sys::ioc(sys::IOC_WRITE | sys::IOC_READ, b'H', nr, len)
+}
+
 impl HidDevice {
+    /// Open the node directly, or through `puckd broker` when the user may not.
     pub fn open(info: &HidInfo) -> io::Result<Self> {
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC)
-            .open(&info.dev)?;
-        Ok(Self { file, info: info.clone() })
+        match OpenOptions::new().read(true).write(true).custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC).open(&info.dev)
+        {
+            Ok(file) => Ok(Self { file, info: info.clone(), exclusive: false }),
+            Err(e) if e.kind() == io::ErrorKind::PermissionDenied => match crate::broker::request(&info.node) {
+                Ok(file) => Ok(Self { file, info: info.clone(), exclusive: true }),
+                Err(b) if b.kind() == io::ErrorKind::NotFound => Err(e),
+                Err(b) => Err(io::Error::new(e.kind(), format!("{e}; broker: {b}"))),
+            },
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Get a report of any type (`buf[0]` = report ID); returns its length.
+    pub fn get_report(&mut self, rtype: u8, buf: &mut [u8]) -> io::Result<usize> {
+        let n = unsafe { sys::ioctl(self.fd(), hidioc_report(true, rtype, buf.len()), buf.as_mut_ptr()) }?;
+        Ok(n as usize)
+    }
+
+    /// Set a report of any type (first byte = report ID).
+    pub fn set_report(&mut self, rtype: u8, data: &[u8]) -> io::Result<()> {
+        let mut buf = data.to_vec();
+        unsafe { sys::ioctl(self.fd(), hidioc_report(false, rtype, buf.len()), buf.as_mut_ptr()) }?;
+        Ok(())
+    }
+
+    /// The node's HID report descriptor.
+    pub fn report_descriptor(&self) -> io::Result<Vec<u8>> {
+        fs::read(Path::new("/sys/class/hidraw").join(&self.info.node).join("device/report_descriptor"))
     }
 
     pub fn fd(&self) -> RawFd {

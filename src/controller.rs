@@ -10,6 +10,7 @@ use crate::desktop::{DesktopDevices, DesktopState, Feedback};
 use crate::gamepad::Gamepad;
 use crate::hid::{HidDevice, HidInfo};
 use crate::osk::{self, Overlay};
+use crate::passthrough::{self, Chord};
 use crate::proto::{self, HapticCmd, Input, Side, State, btn};
 use crate::status;
 
@@ -69,6 +70,25 @@ pub struct Slot {
     announced: bool,
     /// When we asked the controller to turn off (its disconnect is then expected).
     powered_off: Option<Instant>,
+    /// Pass-through clone for Steam and games (exclusive mode only).
+    clone: Option<passthrough::Clone>,
+    /// Who took the controller over through the clone ("Steam"); None: puckd drives it.
+    taken_by: Option<String>,
+    /// The user kept the controller in puckd with the hand-over chord: no clone.
+    held: bool,
+    chord: Chord,
+}
+
+/// The hand-over chord's buttons from the config ("view+menu").
+pub fn chord_bits(cfg: &Config) -> u32 {
+    cfg.general.handover_buttons.split('+').filter_map(|n| btn::from_name(n.trim())).fold(0, |a, b| a | b)
+}
+
+/// "View + ≡ Menu"
+fn chord_label(cfg: &Config) -> String {
+    let names: Vec<String> =
+        cfg.general.handover_buttons.split('+').map(|n| osk::menu::button_label(n.trim())).collect();
+    names.join(" + ")
 }
 
 /// The parts of the gamepad config that need a new virtual device when they change.
@@ -105,6 +125,10 @@ impl Slot {
             pad_key: pad_key(cfg),
             announced: false,
             powered_off: None,
+            clone: None,
+            taken_by: None,
+            held: false,
+            chord: Chord::new(chord_bits(cfg)),
         })
     }
 
@@ -127,7 +151,7 @@ impl Slot {
                 connected: self.connected,
                 mode: self.mode,
                 battery: self.battery,
-                backed_off: self.backed_off,
+                backed_off: self.backed_off || self.taken_by.is_some(),
                 name: &self.display_name(),
                 serial: self.serial.as_deref(),
             },
@@ -172,6 +196,8 @@ impl Slot {
             p.set_remap(&g.remap);
         }
         self.last_keepalive = None;
+        self.chord = Chord::new(chord_bits(cfg));
+        self.sync_clone(cfg);
     }
 
     /// Ask the controller to turn itself off.
@@ -183,9 +209,122 @@ impl Slot {
         Ok(())
     }
 
-    /// Connected and driven by us (not backed off).
+    /// Connected and driven by us (not backed off, not taken over by Steam).
     pub fn is_active(&self) -> bool {
-        self.connected && self.hid.is_some()
+        self.connected && self.hid.is_some() && self.taken_by.is_none()
+    }
+
+    /// puckd has the hardware to itself (through `puckd broker`), so it can offer the
+    /// pass-through clone.
+    fn exclusive(&self) -> bool {
+        self.hid.as_ref().is_some_and(|h| h.exclusive)
+    }
+
+    pub fn clone_fd(&self) -> Option<i32> {
+        self.clone.as_ref().map(|c| c.fd())
+    }
+
+    /// Create or remove the pass-through clone as the state asks for.
+    fn sync_clone(&mut self, cfg: &Config) {
+        let want = self.connected && self.exclusive() && cfg.general.passthrough && !self.held;
+        match (want, self.clone.is_some()) {
+            (true, false) => match self.hid.as_ref().map(|h| passthrough::Clone::create(h, self.serial.as_deref())) {
+                Some(Ok(c)) => {
+                    info!("{}: pass-through device {} for Steam and games", self.label(), c.phys);
+                    self.clone = Some(c);
+                }
+                Some(Err(e)) => warn!("{}: cannot create the pass-through device: {e}", self.label()),
+                None => {}
+            },
+            (false, true) => {
+                self.clone = None;
+                if self.taken_by.is_some() {
+                    self.give_back(cfg);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Steam (or a game) started driving the controller through the clone: step aside.
+    fn take_over(&mut self, who: String, cfg: &Config, desk: &mut DesktopDevices) {
+        info!("{}: {who} took over the controller", self.label());
+        if let Some(p) = &mut self.pad {
+            let _ = p.neutral();
+        }
+        self.pad = None;
+        self.desk.release_all(desk);
+        self.switch = SwitchButton::default();
+        self.rumble_sent = (0, 0);
+        self.toast = Some(osk::Toast {
+            title: format!("{who} has {}", self.which()),
+            line: osk::ToastLine::Text(format!("Hold {} for puckd", chord_label(cfg))),
+        });
+        self.taken_by = Some(who);
+        self.write_status();
+    }
+
+    /// puckd drives the controller again.
+    fn give_back(&mut self, cfg: &Config) {
+        self.taken_by = None;
+        self.last_keepalive = None;
+        self.create_pad(cfg);
+        self.write_status();
+    }
+
+    /// "the controller", or its name when it has one.
+    fn which(&self) -> String {
+        if self.name.is_empty() { "the controller".into() } else { self.name.clone() }
+    }
+
+    /// The hand-over chord: puckd ↔ Steam.
+    fn handover(&mut self, cfg: &Config) {
+        if self.held {
+            self.held = false;
+            self.sync_clone(cfg);
+            info!("{}: controller offered to Steam and games again", self.label());
+            self.toast = Some(osk::Toast {
+                title: "Steam and games may take it".into(),
+                line: osk::ToastLine::Text(format!("Hold {} to keep it in puckd", chord_label(cfg))),
+            });
+        } else {
+            self.held = true;
+            self.sync_clone(cfg);
+            info!("{}: controller kept in puckd", self.label());
+            self.toast = Some(osk::Toast {
+                title: format!("puckd has {}", self.which()),
+                line: osk::ToastLine::Text(format!("Hold {} to hand it to Steam", chord_label(cfg))),
+            });
+        }
+    }
+
+    /// Requests from the clone's users (Steam, games).
+    pub fn on_clone_readable(&mut self, cfg: &Config, desk: &mut DesktopDevices) {
+        let (Some(c), Some(h)) = (&mut self.clone, &mut self.hid) else { return };
+        if let Err(e) = c.serve(h) {
+            warn!("{}: pass-through device: {e}", self.info.node);
+            self.clone = None;
+            return;
+        }
+        if c.take_activity() && self.taken_by.is_none() {
+            let who = c.holder().unwrap_or_else(|| "Another program".into());
+            self.take_over(who, cfg, desk);
+        }
+    }
+
+    /// Periodic: notice when the clone's user let go, and keep the clone in sync.
+    pub fn check_passthrough(&mut self, cfg: &Config) {
+        if let (Some(who), Some(c)) = (&self.taken_by, &self.clone)
+            && c.holder().is_none()
+        {
+            info!("{}: {who} let go of the controller", self.label());
+            self.toast = Some(osk::Toast {
+                title: format!("puckd has {}", self.which()),
+                line: osk::ToastLine::Text(format!("{who} let go")),
+            });
+            self.give_back(cfg);
+        }
+        self.sync_clone(cfg);
     }
 
     /// What the overlay header shows about this controller.
@@ -256,7 +395,7 @@ impl Slot {
 
     /// Give lizard mode back to the controller (on exit).
     pub fn restore_lizard(&mut self) {
-        if let (Some(hid), true, false) = (&mut self.hid, self.connected, self.backed_off) {
+        if let (Some(hid), true, false, None) = (&mut self.hid, self.connected, self.backed_off, &self.taken_by) {
             let _ = hid.write_output(&proto::rumble_report(0, 0));
             let _ = hid.set_feature(&proto::settings_report(&[(proto::SETTING_LIZARD_MODE, proto::LIZARD_MODE_ON)]));
         }
@@ -311,6 +450,7 @@ impl Slot {
         self.last_keepalive = Some(now);
         self.create_pad(cfg);
         self.write_status();
+        self.sync_clone(cfg);
         self.powered_off = None;
         if !self.announced {
             self.announced = true;
@@ -352,6 +492,8 @@ impl Slot {
         self.connected = false;
         info!("{}: controller disconnected", self.label());
         self.pad = None;
+        self.clone = None;
+        self.taken_by = None;
         self.desk.release_all(desk);
         self.switch = SwitchButton::default();
         self.rumble_sent = (0, 0);
@@ -537,11 +679,34 @@ impl Slot {
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
                 Err(e) => return Err(SlotError::Gone(e)),
             };
-            match proto::parse(&buf[..n]) {
-                Some(Input::State(st)) => {
-                    self.connect(cfg, now);
+            let parsed = proto::parse(&buf[..n]);
+            if let Some(Input::State(mut st)) = parsed {
+                self.connect(cfg, now);
+                // The hand-over chord is hidden from everyone else.
+                let (buttons, fire) = if self.exclusive() && cfg.general.passthrough {
+                    self.chord.apply(st.buttons, now)
+                } else {
+                    (st.buttons, false)
+                };
+                if let Some(c) = &mut self.clone {
+                    c.forward(&buf[..n], Some(buttons));
+                }
+                if fire {
+                    self.handover(cfg);
+                }
+                if self.taken_by.is_none() {
+                    st.buttons = buttons;
                     self.route(&st, now, cfg, desk, osk);
                 }
+                continue;
+            }
+            if let (Some(c), Some(id)) = (&mut self.clone, buf.first())
+                && !matches!(*id, proto::ID_WIRELESS | proto::ID_WIRELESS_X)
+            {
+                c.forward(&buf[..n], None);
+            }
+            match parsed {
+                Some(Input::State(_)) => {}
                 Some(Input::Wireless(proto::WIRELESS_CONNECT)) => self.connect(cfg, now),
                 Some(Input::Wireless(proto::WIRELESS_DISCONNECT)) => self.lost(cfg, desk),
                 Some(Input::Battery { charge_state, level }) => {
@@ -587,7 +752,8 @@ impl Slot {
 
     /// Timers: keepalive, rumble refresh, long-press, taps, inertia.
     pub fn tick(&mut self, now: Instant, cfg: &Config, desk: &mut DesktopDevices, osk: &mut Overlay) {
-        if self.hid.is_none() || !self.connected {
+        // Taken over: Steam keeps lizard mode off and drives the haptics.
+        if self.hid.is_none() || !self.connected || self.taken_by.is_some() {
             return;
         }
         let ka = Duration::from_millis(cfg.general.keepalive_ms.clamp(500, 2900));
@@ -616,7 +782,7 @@ impl Slot {
     }
 
     pub fn next_deadline(&self, now: Instant, cfg: &Config) -> Option<Instant> {
-        if self.hid.is_none() || !self.connected {
+        if self.hid.is_none() || !self.connected || self.taken_by.is_some() {
             return None;
         }
         let mut d: Vec<Instant> = Vec::new();

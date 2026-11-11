@@ -208,6 +208,22 @@ SDL3) has the controller open: its virtual devices go away and the other program
 controller to itself. When it closes the controller, puckd takes over again. Set
 *Step aside for* to *steam* to step aside only for Steam, or *never*.
 
+**Exclusive mode** (experimental; [setup](../README.md#optional-exclusive-mode-with-pass-through-for-steam-experimental)):
+only puckd opens the controller. Steam and games see a pass-through copy of it, a native
+Steam Controller with gyro, trackpads and haptics.
+
+- When Steam (or a game) starts using it, puckd steps aside and a banner says so: "Steam has
+  the controller · Hold View + ≡ Menu for puckd". Steam then handles every button, including
+  its own long-press and Steam-button features.
+- **Hold View + ≡ Menu for a second** to take the controller back: Steam sees it unplugged,
+  and puckd's modes and overlay work again. Hold it again to let Steam have it back.
+- These two buttons are held back for a moment when pressed alone, in case the other one
+  follows; a quick tap still goes through.
+- When Steam closes, puckd takes the controller back by itself.
+- *Steam and games may take over* in the Controller tab (`passthrough = false`) turns the
+  copy off: Steam and games then never see the controller. `handover_buttons` changes the
+  chord.
+
 ## Troubleshooting
 
 | Problem | Try |

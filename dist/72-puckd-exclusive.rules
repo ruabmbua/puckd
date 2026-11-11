@@ -1,0 +1,14 @@
+# puckd exclusive mode: only puckd opens the Steam Controller (2026) hidraw nodes, through
+# `puckd broker` (root). Steam and games get puckd's pass-through device instead, so they
+# never fight puckd over the hardware.
+#
+# Sorts after 60-steam-input.rules / 70-puckd.rules and before 73-seat-late.rules, which
+# turns the "uaccess" tag into an ACL for the logged-in user.
+# Install: sudo install -m644 dist/72-puckd-exclusive.rules /etc/udev/rules.d/
+#          sudo udevadm control --reload && sudo udevadm trigger --subsystem-match=hidraw
+#
+# Puck dongles 28de:1304/1305 and the wired controller 28de:1302 (puckd's pass-through
+# devices have no USB parent, so they don't match and keep Steam's access rules).
+KERNEL=="hidraw*", ATTRS{idVendor}=="28de", ATTRS{idProduct}=="1302|1304|1305", TAG-="uaccess", MODE="0600"
+# Bluetooth LE controller 28de:1303
+KERNEL=="hidraw*", KERNELS=="0005:28DE:1303.*", TAG-="uaccess", MODE="0600"

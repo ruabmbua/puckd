@@ -81,6 +81,11 @@ pub struct General {
     pub keepalive_ms: u64,
     /// Show a banner when a controller connects or disconnects.
     pub notify: bool,
+    /// With exclusive access (`puckd broker`): give Steam and games a pass-through clone of
+    /// the controller, which they may take over. false: they never see the controller.
+    pub passthrough: bool,
+    /// Held together for a second: hand the controller between puckd and Steam.
+    pub handover_buttons: String,
 }
 
 impl Default for General {
@@ -95,6 +100,8 @@ impl Default for General {
             preset_switch: PresetSwitch::Ask,
             keepalive_ms: 2000,
             notify: true,
+            passthrough: true,
+            handover_buttons: "view+menu".into(),
         }
     }
 }

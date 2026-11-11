@@ -60,7 +60,15 @@ Findings (2026-11-11, `puckd uhid-clone` spike, Steam + Outer Wilds, usbmon base
   shell with firmware logs); Steam opens it.
 - Steam's rule `KERNELS=="000[356]:28DE:*"` gives the user access to the clone's hidraw.
 
-Plan:
+Implemented (first cut, untested on hardware): `puckd broker` (fd passing, uid check),
+`72-puckd-exclusive.rules`, the wired-persona clone per connected controller with
+take-over detection (first output/feature request from a client; the holder's name from
+/proc), release when no process holds the clone, the View + ≡ Menu hand-over chord
+(hidden from puckd and the clone, single presses held back 80 ms), config `passthrough` /
+`handover_buttons`, banners. Open: Steam's settings that outlive its take-over (trackpad
+modes?), BLE-linked controllers through the wired persona, kernel 7.3 hid-steam.
+
+Original plan:
 1. In the daemon: one wired-persona clone per *connected* controller (any link), created
    on connect, destroyed on disconnect. Dongle-level traffic (report 2, 0x79/0x7b) stays
    with puckd. No uinput pad in this mode (else games see two controllers).

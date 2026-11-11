@@ -1,0 +1,13 @@
+[Unit]
+Description=puckd broker: exclusive Steam Controller access for %i's puckd
+Documentation=https://github.com/ruabmbua/puckd
+
+[Service]
+Type=simple
+# Runs as root: point this at a root-owned copy of puckd (not one in a user's home).
+ExecStart=/usr/local/bin/puckd broker --allow %i
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

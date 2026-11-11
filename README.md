@@ -115,6 +115,29 @@ The service doesn't need `WAYLAND_DISPLAY`: without it, the overlay connects to 
 several Wayland sessions at once, run `dbus-update-activation-environment --systemd
 WAYLAND_DISPLAY` from your compositor's startup.
 
+### Optional: exclusive mode with pass-through for Steam (experimental)
+
+By default puckd steps aside whenever Steam or an SDL game opens the controller. In
+exclusive mode only puckd can open the controller. Steam and games get a pass-through copy
+instead, which they drive as a native Steam Controller: gyro, trackpads and haptics work in
+Steam Input and its games. puckd steps aside while they have it, and you hand the controller
+back and forth by holding View + ≡ Menu for a second (see the
+[manual](docs/manual.md#when-steam-is-running)).
+
+It needs a small root helper, `puckd broker`, which opens the devices for your puckd:
+
+```sh
+sudo install -m755 target/release/puckd /usr/local/bin/      # root runs it: not from ~
+sudo install -m644 dist/puckd-broker@.service /etc/systemd/system/
+sudo systemctl enable --now puckd-broker@$USER
+sudo install -m644 dist/72-puckd-exclusive.rules /etc/udev/rules.d/
+sudo udevadm control --reload && sudo udevadm trigger --subsystem-match=hidraw
+```
+
+Then restart puckd. `puckd list` still says "rw ok" (through the broker), and the log says
+"pass-through device" when a controller connects. To go back, remove the udev rule and
+trigger again.
+
 ## Configuration
 
 Most settings can be changed live in the overlay (press QAM). For the rest, see

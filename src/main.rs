@@ -1,6 +1,7 @@
 //! puckd: userspace driver for the Steam Controller (2026) and its Puck dongle.
 
 mod backoff;
+mod broker;
 mod config;
 mod controller;
 mod daemon;
@@ -18,6 +19,7 @@ mod status;
 mod study;
 mod sys;
 mod tools;
+mod uhid;
 mod uinput;
 
 use std::path::PathBuf;
@@ -43,9 +45,11 @@ USAGE:
     puckd pad-preview [PROFILE] [SECS]
                                      create a profile's virtual pad (X and L4 blink, LT ramps)
     puckd check-config [-c FILE]     validate the config file
+    puckd broker --allow USER        (root) exclusive mode: hand the controller's hidraw
+                                     nodes and /dev/uhid to USER's puckd
     puckd uhid-clone [--bus usb|ble|virtual] [--pid HEX] [--log-input] all|hidrawN...
-                                     experimental: clone hidraw nodes via uhid, forward both
-                                     ways and log what Steam & co send (run as root)
+                                     debug: clone hidraw nodes via uhid, forward both ways
+                                     and log what Steam & co send (root, daemon stopped)
 
 OPTIONS:
     -c, --config FILE   config file (default: $XDG_CONFIG_HOME/puckd.toml)
@@ -145,6 +149,10 @@ fn main() -> ExitCode {
         "osk-preview" => {
             sys::install_signal_handlers();
             tools::osk_preview(&rest)
+        }
+        "broker" => {
+            sys::install_signal_handlers();
+            broker::run(&rest)
         }
         "uhid-clone" => {
             sys::install_signal_handlers();

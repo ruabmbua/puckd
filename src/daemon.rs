@@ -24,6 +24,7 @@ const MAX_SLEEP: Duration = Duration::from_millis(1000);
 enum Target {
     Hid,
     Pad,
+    Clone,
     Osk,
 }
 
@@ -99,6 +100,9 @@ impl Daemon {
     }
 
     fn check_backoff(&mut self) {
+        for s in self.slots.values_mut() {
+            s.check_passthrough(&self.cfg);
+        }
         let mode = self.cfg.general.backoff;
         if mode == Backoff::Never {
             for s in self.slots.values_mut() {
@@ -391,6 +395,10 @@ impl Daemon {
                     fds.push(fd);
                     targets.push((k.clone(), Target::Pad));
                 }
+                if let Some(fd) = s.clone_fd() {
+                    fds.push(fd);
+                    targets.push((k.clone(), Target::Clone));
+                }
             }
             let mut wake = now + MAX_SLEEP;
             if let Some(t) = self.osk.prompt_deadline() {
@@ -442,6 +450,7 @@ impl Daemon {
                         }
                     }
                     Target::Pad => slot.on_pad_readable(now),
+                    Target::Clone => slot.on_clone_readable(&self.cfg, &mut self.desk),
                 }
             }
             for k in dead {
