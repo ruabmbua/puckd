@@ -1,0 +1,10 @@
+[Unit]
+Description=puckd broker: exclusive Steam Controller access for puckd
+Documentation=https://github.com/ruabmbua/puckd
+Requires=puckd-broker.socket
+
+[Service]
+Type=simple
+# Started by puckd-broker.socket when a puckd asks for a device; exits after a minute idle.
+# Runs as root: point this at a root-owned copy of puckd (not one in a user's home).
+ExecStart=/usr/local/bin/puckd broker

@@ -212,9 +212,17 @@ controller to itself. When it closes the controller, puckd takes over again. Set
 only puckd opens the controller. Steam and games see a pass-through copy of it, a native
 Steam Controller with gyro, trackpads and haptics.
 
-- When Steam (or a game) starts using it, puckd steps aside and a banner says so: "Steam has
-  the controller · Hold View + ≡ Menu for puckd". Steam then handles every button, including
-  its own long-press and Steam-button features.
+- **Steam takes over.** When Steam starts using the copy, puckd steps aside and a banner says
+  so: "Steam has the controller · Hold View + ≡ Menu for puckd". Steam Input then handles
+  every button, including its own long-press and Steam-button features.
+- **Games share.** A game that drives the Steam Controller itself (SDL3) gets the native
+  controller in gamepad mode, but puckd keeps its buttons: QAM opens the overlay, holding ≡
+  switches modes (a short press still reaches the game). In desktop mode or with the overlay
+  open, the game sees the controller at rest. puckd's own virtual gamepad goes away while
+  the game has the native one, so the game doesn't see two controllers. If Steam joins,
+  Steam takes over.
+- When Steam or the game lets go, puckd resets the controller's settings to the firmware
+  defaults and applies its own.
 - **Hold View + ≡ Menu for a second** to take the controller back: Steam sees it unplugged,
   and puckd's modes and overlay work again. Hold it again to let Steam have it back.
 - These two buttons are held back for a moment when pressed alone, in case the other one

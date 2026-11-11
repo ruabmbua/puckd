@@ -15,6 +15,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use log::{info, warn};
+use serde::Deserialize;
 
 use crate::hid;
 
@@ -123,23 +124,93 @@ pub fn request(what: &str) -> io::Result<File> {
     }
 }
 
-fn peer_uid(sock: RawFd) -> Option<u32> {
+/// The connecting process's (pid, uid, gid).
+fn peer(sock: RawFd) -> Option<(i32, u32, u32)> {
     let mut cred: libc::ucred = unsafe { zeroed() };
     let mut len = size_of::<libc::ucred>() as libc::socklen_t;
     let r =
         unsafe { libc::getsockopt(sock, libc::SOL_SOCKET, libc::SO_PEERCRED, &mut cred as *mut _ as *mut _, &mut len) };
-    (r == 0).then_some(cred.uid)
+    (r == 0).then_some((cred.pid, cred.uid, cred.gid))
+}
+
+/// `/etc/puckd/broker.toml`: who may get the controller.
+#[derive(Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Access {
+    /// Members of this group may (supplementary or primary; "" = no group).
+    pub group: String,
+    /// These users may too (names or uids).
+    pub users: Vec<String>,
+}
+
+impl Default for Access {
+    fn default() -> Self {
+        Self { group: "puckd".into(), users: Vec::new() }
+    }
+}
+
+pub const CONFIG: &str = "/etc/puckd/broker.toml";
+
+impl Access {
+    fn load(path: &Path) -> Result<Self, String> {
+        match fs::read_to_string(path) {
+            Ok(t) => toml::from_str(&t).map_err(|e| format!("{}: {e}", path.display())),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Self::default()),
+            Err(e) => Err(format!("{}: {e}", path.display())),
+        }
+    }
+
+    /// Whether this peer may use the broker.
+    fn allows(&self, pid: i32, uid: u32, gid: u32) -> bool {
+        if uid == 0 || self.users.iter().any(|u| uid_of(u) == Some(uid)) {
+            return true;
+        }
+        let Some(want) = (!self.group.is_empty()).then(|| gid_of(&self.group)).flatten() else { return false };
+        // The process's own groups (set at login), or the group database (no new login
+        // needed after `usermod -aG`).
+        gid == want || process_groups(pid).contains(&want) || user_groups(uid).contains(&want)
+    }
 }
 
 fn uid_of(name: &str) -> Option<u32> {
     if let Ok(n) = name.parse() {
         return Some(n);
     }
-    let passwd = fs::read_to_string("/etc/passwd").ok()?;
-    passwd.lines().find_map(|l| {
-        let mut f = l.split(':');
-        (f.next() == Some(name)).then(|| f.nth(1).and_then(|u| u.parse().ok())).flatten()
-    })
+    let c = std::ffi::CString::new(name).ok()?;
+    let pw = unsafe { libc::getpwnam(c.as_ptr()) };
+    (!pw.is_null()).then(|| unsafe { (*pw).pw_uid })
+}
+
+fn gid_of(name: &str) -> Option<u32> {
+    if let Ok(n) = name.parse() {
+        return Some(n);
+    }
+    let c = std::ffi::CString::new(name).ok()?;
+    let gr = unsafe { libc::getgrnam(c.as_ptr()) };
+    (!gr.is_null()).then(|| unsafe { (*gr).gr_gid })
+}
+
+fn process_groups(pid: i32) -> Vec<u32> {
+    let Ok(st) = fs::read_to_string(format!("/proc/{pid}/status")) else { return Vec::new() };
+    st.lines()
+        .find_map(|l| l.strip_prefix("Groups:"))
+        .map(|g| g.split_whitespace().filter_map(|x| x.parse().ok()).collect())
+        .unwrap_or_default()
+}
+
+fn user_groups(uid: u32) -> Vec<u32> {
+    let pw = unsafe { libc::getpwuid(uid) };
+    if pw.is_null() {
+        return Vec::new();
+    }
+    let (name, gid) = unsafe { ((*pw).pw_name, (*pw).pw_gid) };
+    let mut groups = vec![0 as libc::gid_t; 256];
+    let mut n = groups.len() as libc::c_int;
+    if unsafe { libc::getgrouplist(name, gid, groups.as_mut_ptr(), &mut n) } < 0 {
+        return Vec::new();
+    }
+    groups.truncate(n.max(0) as usize);
+    groups
 }
 
 fn open_rw(path: &Path) -> io::Result<File> {
@@ -161,90 +232,127 @@ fn serve(req: &str) -> Result<File, String> {
     open_rw(&Path::new("/dev").join(node)).map_err(|e| format!("{node}: {e}"))
 }
 
+/// How long a socket-activated broker waits for the next request before exiting.
+const IDLE_EXIT: Duration = Duration::from_secs(60);
+
+/// The listening socket from systemd socket activation, if any.
+fn activated_socket() -> Option<OwnedFd> {
+    let pid: u32 = std::env::var("LISTEN_PID").ok()?.parse().ok()?;
+    let n: u32 = std::env::var("LISTEN_FDS").ok()?.parse().ok()?;
+    (pid == std::process::id() && n >= 1).then(|| unsafe { OwnedFd::from_raw_fd(3) })
+}
+
+fn listen() -> io::Result<OwnedFd> {
+    let dir = Path::new(SOCKET).parent().unwrap();
+    fs::create_dir_all(dir)?;
+    fs::set_permissions(dir, fs::Permissions::from_mode(0o755))?;
+    let _ = fs::remove_file(SOCKET);
+    let l = socket()?;
+    let (addr, len) = sockaddr(SOCKET)?;
+    if unsafe { libc::bind(l.as_raw_fd(), &addr as *const _ as *const _, len) } < 0
+        || unsafe { libc::listen(l.as_raw_fd(), 8) } < 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    // Anyone may connect; each peer is checked against the access config.
+    fs::set_permissions(SOCKET, fs::Permissions::from_mode(0o666))?;
+    Ok(l)
+}
+
 pub fn run(args: &[String]) -> ExitCode {
-    let mut allowed: Vec<u32> = vec![0];
+    let mut cfg_path = std::path::PathBuf::from(CONFIG);
+    let mut extra: Vec<String> = Vec::new();
     let mut it = args.iter();
     while let Some(a) = it.next() {
-        match a.as_str() {
-            "--allow" => match it.next().and_then(|n| uid_of(n)) {
-                Some(u) => allowed.push(u),
-                None => {
-                    eprintln!("--allow USER: unknown user");
-                    return ExitCode::from(2);
-                }
-            },
-            other => {
-                eprintln!("usage: puckd broker --allow USER [--allow USER...]  (unknown '{other}')");
+        match (a.as_str(), it.clone().next()) {
+            ("--config", Some(f)) => {
+                cfg_path = f.into();
+                it.next();
+            }
+            ("--allow", Some(u)) => {
+                extra.push(u.clone());
+                it.next();
+            }
+            _ => {
+                eprintln!("usage: puckd broker [--config FILE] [--allow USER]...");
                 return ExitCode::from(2);
             }
         }
-    }
-    if allowed.len() == 1 {
-        eprintln!("usage: puckd broker --allow USER");
-        return ExitCode::from(2);
     }
     if unsafe { libc::geteuid() } != 0 {
         eprintln!("puckd broker must run as root");
         return ExitCode::FAILURE;
     }
-    let dir = Path::new(SOCKET).parent().unwrap();
-    let _ = fs::create_dir_all(dir);
-    let _ = fs::set_permissions(dir, fs::Permissions::from_mode(0o755));
-    let _ = fs::remove_file(SOCKET);
-    let listener = match socket() {
-        Ok(s) => s,
+    if let Err(e) = Access::load(&cfg_path) {
+        eprintln!("{e}");
+        return ExitCode::from(2);
+    }
+    let activated = activated_socket();
+    let idle = activated.is_some().then_some(IDLE_EXIT);
+    let listener = match activated.map(Ok).unwrap_or_else(listen) {
+        Ok(l) => l,
         Err(e) => {
-            eprintln!("socket: {e}");
+            eprintln!("{SOCKET}: {e}");
             return ExitCode::FAILURE;
         }
     };
-    let (addr, len) = sockaddr(SOCKET).unwrap();
-    if unsafe { libc::bind(listener.as_raw_fd(), &addr as *const _ as *const _, len) } < 0
-        || unsafe { libc::listen(listener.as_raw_fd(), 8) } < 0
-    {
-        eprintln!("{SOCKET}: {}", io::Error::last_os_error());
-        return ExitCode::FAILURE;
-    }
-    // Anyone may connect; the peer's uid is checked per connection.
-    let _ = fs::set_permissions(SOCKET, fs::Permissions::from_mode(0o666));
-    info!("broker listening on {SOCKET} for uids {:?}", &allowed[1..]);
-    loop {
-        let c = unsafe {
-            libc::accept4(listener.as_raw_fd(), std::ptr::null_mut(), std::ptr::null_mut(), libc::SOCK_CLOEXEC)
-        };
-        if c < 0 {
-            let e = io::Error::last_os_error();
-            if e.kind() == io::ErrorKind::Interrupted {
-                if crate::sys::quit_requested() {
+    info!("broker on {SOCKET}{}", if idle.is_some() { " (socket-activated)" } else { "" });
+    while !crate::sys::quit_requested() {
+        match crate::sys::poll(&[listener.as_raw_fd()], idle) {
+            Ok(r) if r[0] == 0 => {
+                if idle.is_some() && !crate::sys::quit_requested() {
+                    info!("idle, exiting (systemd starts the broker again on the next request)");
                     break;
                 }
                 continue;
             }
-            eprintln!("accept: {e}");
-            return ExitCode::FAILURE;
+            Ok(_) => {}
+            Err(e) => {
+                eprintln!("poll: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+        let c = unsafe {
+            libc::accept4(listener.as_raw_fd(), std::ptr::null_mut(), std::ptr::null_mut(), libc::SOCK_CLOEXEC)
+        };
+        if c < 0 {
+            continue;
         }
         let c = unsafe { OwnedFd::from_raw_fd(c) };
         set_timeout(c.as_raw_fd(), Duration::from_secs(2));
-        let uid = peer_uid(c.as_raw_fd());
-        if !uid.is_some_and(|u| allowed.contains(&u)) {
-            warn!("refusing uid {uid:?}");
-            let _ = send(c.as_raw_fd(), b"not allowed", None);
+        // Re-read per request: edits apply without a restart.
+        let mut access = Access::load(&cfg_path).unwrap_or_else(|e| {
+            warn!("{e}; using the defaults");
+            Access::default()
+        });
+        access.users.extend(extra.iter().cloned());
+        let Some((pid, uid, gid)) = peer(c.as_raw_fd()) else { continue };
+        if !access.allows(pid, uid, gid) {
+            let why = if access.group.is_empty() {
+                "not allowed (see /etc/puckd/broker.toml)".to_string()
+            } else {
+                format!("not allowed: add the user to the \"{}\" group", access.group)
+            };
+            warn!("refusing uid {uid} (pid {pid}): {why}");
+            let _ = send(c.as_raw_fd(), why.as_bytes(), None);
             continue;
         }
         let Ok((msg, _)) = recv(c.as_raw_fd()) else { continue };
         let req = String::from_utf8_lossy(&msg).into_owned();
         match serve(&req) {
             Ok(f) => {
-                info!("uid {} gets {req}", uid.unwrap_or(0));
+                info!("uid {uid} gets {req}");
                 let _ = send(c.as_raw_fd(), b"ok", Some(f.as_raw_fd()));
             }
             Err(e) => {
-                warn!("uid {}: {e}", uid.unwrap_or(0));
+                warn!("uid {uid}: {e}");
                 let _ = send(c.as_raw_fd(), e.as_bytes(), None);
             }
         }
     }
-    let _ = fs::remove_file(SOCKET);
+    if idle.is_none() {
+        let _ = fs::remove_file(SOCKET);
+    }
     ExitCode::SUCCESS
 }
 
@@ -252,6 +360,16 @@ pub fn run(args: &[String]) -> ExitCode {
 mod tests {
     use super::*;
     use std::io::{Read, Seek, Write};
+
+    #[test]
+    fn access_config() {
+        let a: Access = toml::from_str("users = [\"1234\"]").unwrap();
+        assert_eq!(a.group, "puckd");
+        assert!(a.allows(std::process::id() as i32, 1234, 1234));
+        assert!(a.allows(1, 0, 0));
+        let none: Access = toml::from_str("group = \"\"").unwrap();
+        assert!(!none.allows(std::process::id() as i32, 4242, 4242));
+    }
 
     #[test]
     fn passes_an_fd() {

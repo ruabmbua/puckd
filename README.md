@@ -124,19 +124,23 @@ Steam Input and its games. puckd steps aside while they have it, and you hand th
 back and forth by holding View + ≡ Menu for a second (see the
 [manual](docs/manual.md#when-steam-is-running)).
 
-It needs a small root helper, `puckd broker`, which opens the devices for your puckd:
+It needs a small root helper, `puckd broker`, which opens the devices for your puckd. It is
+socket-activated: systemd starts it when puckd asks for a device, and it exits again after a
+minute. Members of the `puckd` group may use it (`/etc/puckd/broker.toml`):
 
 ```sh
 sudo install -m755 target/release/puckd /usr/local/bin/      # root runs it: not from ~
-sudo install -m644 dist/puckd-broker@.service /etc/systemd/system/
-sudo systemctl enable --now puckd-broker@$USER
+sudo groupadd -r puckd && sudo usermod -aG puckd $USER
+sudo install -Dm644 dist/broker.toml /etc/puckd/broker.toml
+sudo install -m644 dist/puckd-broker.socket dist/puckd-broker.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now puckd-broker.socket
 sudo install -m644 dist/72-puckd-exclusive.rules /etc/udev/rules.d/
 sudo udevadm control --reload && sudo udevadm trigger --subsystem-match=hidraw
 ```
 
-Then restart puckd. `puckd list` still says "rw ok" (through the broker), and the log says
-"pass-through device" when a controller connects. To go back, remove the udev rule and
-trigger again.
+Then restart puckd (no new login needed for the group). `puckd list` still says "rw ok"
+(through the broker), and the log says "pass-through device" when a controller connects.
+To go back, remove the udev rule and trigger again.
 
 ## Configuration
 

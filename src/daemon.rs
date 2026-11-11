@@ -101,7 +101,7 @@ impl Daemon {
 
     fn check_backoff(&mut self) {
         for s in self.slots.values_mut() {
-            s.check_passthrough(&self.cfg);
+            s.check_passthrough(&self.cfg, &mut self.desk);
         }
         let mode = self.cfg.general.backoff;
         if mode == Backoff::Never {

@@ -15,6 +15,8 @@ pub const WIRELESS_CONNECT: u8 = 2;
 
 pub const FEATURE_REPORT_LEN: usize = 64;
 pub const ID_SET_SETTINGS_VALUES: u8 = 0x87;
+pub const ID_SET_DEFAULT_DIGITAL_MAPPINGS: u8 = 0x85;
+pub const ID_LOAD_DEFAULT_SETTINGS: u8 = 0x8e;
 
 pub const SETTING_LIZARD_MODE: u8 = 9;
 pub const SETTING_IMU_MODE: u8 = 48;
@@ -243,6 +245,20 @@ pub fn settings_report(settings: &[(u8, u16)]) -> [u8; FEATURE_REPORT_LEN] {
         b[o] = num;
         b[o + 1..o + 3].copy_from_slice(&val.to_le_bytes());
     }
+    b
+}
+
+/// Feature report: load the firmware's default settings (undoes what Steam set).
+pub fn load_default_settings_report() -> [u8; FEATURE_REPORT_LEN] {
+    let mut b = [0u8; FEATURE_REPORT_LEN];
+    b[..3].copy_from_slice(&[1, ID_LOAD_DEFAULT_SETTINGS, 0]);
+    b
+}
+
+/// Feature report: restore lizard mode's default button mappings (Steam clears them).
+pub fn default_digital_mappings_report() -> [u8; FEATURE_REPORT_LEN] {
+    let mut b = [0u8; FEATURE_REPORT_LEN];
+    b[..3].copy_from_slice(&[1, ID_SET_DEFAULT_DIGITAL_MAPPINGS, 0]);
     b
 }
 

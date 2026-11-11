@@ -39,15 +39,22 @@ impl Clone {
         let descriptor = hid.report_descriptor()?;
         let phys = format!("{}/passthrough", hid.info.stable_id());
         debug_assert!(phys.starts_with(OWN_PHYS_PREFIX));
+        // A dongle slot becomes a wired controller; wired and BLE controllers keep their
+        // identity (BLE controllers are uhid devices already, which Steam accepts).
+        let (bus, pid, name) = if hid.info.is_dongle() {
+            (uhid::BUS_USB, hid::PID_TRITON_USB, "Valve Software Steam Controller")
+        } else {
+            (hid.info.bus, hid.info.pid, hid.info.name.as_str())
+        };
         let dev = uhid::Device::create(
             uhid::open_file()?,
             &uhid::Params {
-                name: "Valve Software Steam Controller",
+                name,
                 phys: &phys,
                 uniq: serial.unwrap_or(""),
-                bus: uhid::BUS_USB,
+                bus,
                 vid: hid::VALVE_VID,
-                pid: hid::PID_TRITON_USB,
+                pid,
                 descriptor: &descriptor,
             },
         )?;
@@ -81,6 +88,20 @@ impl Clone {
             _ => self.dev.input(report),
         };
         if let Err(e) = res {
+            debug!("pass-through input: {e}");
+        }
+    }
+
+    /// Forward a report with the controller at rest: no buttons, sticks, triggers, trackpad
+    /// touches or motion (desktop mode, overlay open). Other reports go through as they are.
+    pub fn forward_neutral(&mut self, report: &[u8]) {
+        let Some(&id) = report.first() else { return };
+        if !matches!(id, proto::ID_STATE | proto::ID_STATE_BLE | proto::ID_STATE_TS) || report.len() < 46 {
+            return self.forward(report, None);
+        }
+        let mut r = report.to_vec();
+        neutralize(&mut r);
+        if let Err(e) = self.dev.input(&r) {
             debug!("pass-through input: {e}");
         }
     }
@@ -127,14 +148,25 @@ impl Clone {
         std::mem::take(&mut self.activity)
     }
 
-    /// Who holds the clone open (Steam preferred), None when nobody does.
-    pub fn holder(&self) -> Option<String> {
+    /// Who holds the clone open: (name, is Steam), Steam preferred. None when nobody does.
+    pub fn holder(&self) -> Option<(String, bool)> {
         let dev = self.dev_path()?;
         let openers = crate::backoff::openers(std::slice::from_ref(&dev));
         let list = openers.get(&dev)?;
         let o = list.iter().find(|o| o.is_steam()).or_else(|| list.first())?;
-        Some(if o.is_steam() { "Steam".into() } else { o.comm.clone() })
+        Some(if o.is_steam() { ("Steam".into(), true) } else { (o.comm.clone(), false) })
     }
+}
+
+/// Zero the inputs of a state report (0x42/0x45/0x47), keeping sequence and timestamps.
+fn neutralize(r: &mut [u8]) {
+    // buttons, triggers, sticks
+    r[2..18].fill(0);
+    // trackpads (0x47 has a u16 trackpad timestamp first)
+    let p = if r[0] == proto::ID_STATE_TS { 20 } else { 18 };
+    r[p..p + 12].fill(0);
+    // accelerometer, gyro
+    r[34..46].fill(0);
 }
 
 const CHORD_HOLD: Duration = Duration::from_millis(1000);
@@ -444,6 +476,22 @@ mod tests {
         assert_eq!(c.apply(0, ms(t, 30)).0, btn::VIEW);
         assert_eq!(c.apply(0, ms(t, 60)).0, btn::VIEW);
         assert_eq!(c.apply(0, ms(t, 100)).0, 0);
+    }
+
+    #[test]
+    fn neutral_report_keeps_only_seq_and_timestamps() {
+        let mut r = vec![0xffu8; 46];
+        r[0] = proto::ID_STATE;
+        neutralize(&mut r);
+        assert_eq!(r[1], 0xff);
+        assert!(r[2..30].iter().all(|&b| b == 0));
+        assert!(r[30..34].iter().all(|&b| b == 0xff)); // IMU timestamp
+        assert!(r[34..46].iter().all(|&b| b == 0));
+        let st = match proto::parse(&r) {
+            Some(proto::Input::State(s)) => s,
+            _ => panic!(),
+        };
+        assert_eq!((st.buttons, st.lx, st.rpad_pressure, st.gyro), (0, 0, 0, [0; 3]));
     }
 
     #[test]

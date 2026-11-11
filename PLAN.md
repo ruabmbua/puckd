@@ -60,13 +60,19 @@ Findings (2026-11-11, `puckd uhid-clone` spike, Steam + Outer Wilds, usbmon base
   shell with firmware logs); Steam opens it.
 - Steam's rule `KERNELS=="000[356]:28DE:*"` gives the user access to the clone's hidraw.
 
-Implemented (first cut, untested on hardware): `puckd broker` (fd passing, uid check),
-`72-puckd-exclusive.rules`, the wired-persona clone per connected controller with
-take-over detection (first output/feature request from a client; the holder's name from
-/proc), release when no process holds the clone, the View + ≡ Menu hand-over chord
-(hidden from puckd and the clone, single presses held back 80 ms), config `passthrough` /
-`handover_buttons`, banners. Open: Steam's settings that outlive its take-over (trackpad
-modes?), BLE-linked controllers through the wired persona, kernel 7.3 hid-steam.
+Implemented: `puckd broker` (fd passing; socket-activated, exits when idle; access from
+`/etc/puckd/broker.toml`: a group, default `puckd`, plus a user list),
+`72-puckd-exclusive.rules`, a clone per connected controller (dongle slot → wired persona,
+wired/BLE keep their identity), the View + ≡ Menu hand-over chord (hidden from puckd and the
+clone, single presses held back 80 ms), config `passthrough` / `handover_buttons`, banners.
+Clients: Steam takes over (puckd steps aside until the chord or until Steam lets go);
+anything else (SDL3 games) shares: native controller in gamepad mode with puckd's buttons
+filtered out, a neutral controller in desktop mode / overlay, no uinput pad meanwhile. On
+release puckd sends LOAD_DEFAULT_SETTINGS (0x8E) and SET_DEFAULT_DIGITAL_MAPPINGS (0x85)
+(IDs from the classic Steam Controller table; 0x87 and 0x9F match it), then its settings.
+Untested: the share mode with an SDL3 game, 0x8E/0x85 on this controller, BLE clones.
+Open: kernel 7.3 hid-steam.
+
 Tested on hardware (2026-11-11): Steam takes over the clone (banner), the chord hands the
 controller back and forth, and while puckd has it, Steam lists puckd's uinput pad. Except
 the extended profile: Steam ignores an evdev pad with Valve's IDs (28de:1205, it expects
@@ -74,9 +80,6 @@ hidraw for those), so that profile never shows in Steam's controller list. With
 pass-through this matters less (Steam gets the real thing); a uhid Steam Deck persona
 would fix it if needed.
 
-Later: the broker's allow list moves to a global `/etc/puckd.toml` (or similar): a group
-(e.g. `puckd`, added to the user as a supplementary group) as the main mechanism, plus an
-optional user list; then the unit needs no `%i`.
 
 Original plan:
 1. In the daemon: one wired-persona clone per *connected* controller (any link), created

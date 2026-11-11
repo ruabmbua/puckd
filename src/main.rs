@@ -45,8 +45,9 @@ USAGE:
     puckd pad-preview [PROFILE] [SECS]
                                      create a profile's virtual pad (X and L4 blink, LT ramps)
     puckd check-config [-c FILE]     validate the config file
-    puckd broker --allow USER        (root) exclusive mode: hand the controller's hidraw
-                                     nodes and /dev/uhid to USER's puckd
+    puckd broker [--config FILE]     (root, usually socket-activated) exclusive mode: hand
+                                     the controller's hidraw nodes and /dev/uhid to the
+                                     puckd of users in /etc/puckd/broker.toml
     puckd uhid-clone [--bus usb|ble|virtual] [--pid HEX] [--log-input] all|hidrawN...
                                      debug: clone hidraw nodes via uhid, forward both ways
                                      and log what Steam & co send (root, daemon stopped)

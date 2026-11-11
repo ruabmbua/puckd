@@ -72,11 +72,21 @@ pub struct Slot {
     powered_off: Option<Instant>,
     /// Pass-through clone for Steam and games (exclusive mode only).
     clone: Option<passthrough::Clone>,
-    /// Who took the controller over through the clone ("Steam"); None: puckd drives it.
-    taken_by: Option<String>,
+    /// Who uses the pass-through clone; None: nobody.
+    client: Option<Client>,
     /// The user kept the controller in puckd with the hand-over chord: no clone.
     held: bool,
     chord: Chord,
+}
+
+/// A program using the pass-through clone.
+struct Client {
+    name: String,
+    /// Steam: Steam Input does what puckd does (modes, menus, mouse), so puckd steps aside
+    /// completely until the hand-over chord. Other programs (SDL games) share: they get
+    /// the native controller in gamepad mode, while puckd keeps its buttons, desktop mode
+    /// and overlay.
+    takes_over: bool,
 }
 
 /// The hand-over chord's buttons from the config ("view+menu").
@@ -126,7 +136,7 @@ impl Slot {
             announced: false,
             powered_off: None,
             clone: None,
-            taken_by: None,
+            client: None,
             held: false,
             chord: Chord::new(chord_bits(cfg)),
         })
@@ -151,7 +161,7 @@ impl Slot {
                 connected: self.connected,
                 mode: self.mode,
                 battery: self.battery,
-                backed_off: self.backed_off || self.taken_by.is_some(),
+                backed_off: self.backed_off || self.steam_has_it(),
                 name: &self.display_name(),
                 serial: self.serial.as_deref(),
             },
@@ -211,7 +221,12 @@ impl Slot {
 
     /// Connected and driven by us (not backed off, not taken over by Steam).
     pub fn is_active(&self) -> bool {
-        self.connected && self.hid.is_some() && self.taken_by.is_none()
+        self.connected && self.hid.is_some() && !self.steam_has_it()
+    }
+
+    /// Steam took the controller over (puckd stays out of the way).
+    fn steam_has_it(&self) -> bool {
+        self.client.as_ref().is_some_and(|c| c.takes_over)
     }
 
     /// puckd has the hardware to itself (through `puckd broker`), so it can offer the
@@ -238,36 +253,57 @@ impl Slot {
             },
             (false, true) => {
                 self.clone = None;
-                if self.taken_by.is_some() {
-                    self.give_back(cfg);
+                if self.client.is_some() {
+                    self.release(cfg);
                 }
             }
             _ => {}
         }
     }
 
-    /// Steam (or a game) started driving the controller through the clone: step aside.
-    fn take_over(&mut self, who: String, cfg: &Config, desk: &mut DesktopDevices) {
-        info!("{}: {who} took over the controller", self.label());
+    /// A program started using the clone. Steam takes over; others share.
+    fn attach(&mut self, name: String, takes_over: bool, cfg: &Config, desk: &mut DesktopDevices) {
+        // Its native controller replaces our pad (else it sees two).
         if let Some(p) = &mut self.pad {
             let _ = p.neutral();
         }
         self.pad = None;
-        self.desk.release_all(desk);
-        self.switch = SwitchButton::default();
         self.rumble_sent = (0, 0);
-        self.toast = Some(osk::Toast {
-            title: format!("{who} has {}", self.which()),
-            line: osk::ToastLine::Text(format!("Hold {} for puckd", chord_label(cfg))),
-            secs: osk::Toast::LONG,
-        });
-        self.taken_by = Some(who);
+        if takes_over {
+            info!("{}: {name} took over the controller", self.label());
+            self.desk.release_all(desk);
+            self.switch = SwitchButton::default();
+            self.toast = Some(osk::Toast {
+                title: format!("{name} has {}", self.which()),
+                line: osk::ToastLine::Text(format!("Hold {} for puckd", chord_label(cfg))),
+                secs: osk::Toast::LONG,
+            });
+        } else {
+            info!("{}: {name} uses the controller natively (shared with puckd)", self.label());
+            self.toast = Some(osk::Toast {
+                title: format!("{name} uses {}", self.which()),
+                line: osk::ToastLine::Text("Native controller in gamepad mode".into()),
+                secs: osk::Toast::NORMAL,
+            });
+        }
+        self.client = Some(Client { name, takes_over });
         self.write_status();
     }
 
-    /// puckd drives the controller again.
-    fn give_back(&mut self, cfg: &Config) {
-        self.taken_by = None;
+    /// The client is gone: undo what it may have changed, puckd drives the controller again.
+    fn release(&mut self, cfg: &Config) {
+        self.client = None;
+        // Steam changes settings (trackpad and IMU modes, ...) and clears the lizard-mode
+        // mappings: back to the firmware defaults, then puckd's own settings right away.
+        if let Some(hid) = &mut self.hid
+            && self.connected
+        {
+            for r in [proto::load_default_settings_report(), proto::default_digital_mappings_report()] {
+                if let Err(e) = hid.set_feature(&r) {
+                    debug!("{}: resetting settings ({:#04x}): {e}", self.info.node, r[1]);
+                }
+            }
+        }
         self.last_keepalive = None;
         self.create_pad(cfg);
         self.write_status();
@@ -278,7 +314,7 @@ impl Slot {
         if self.name.is_empty() { "the controller".into() } else { self.name.clone() }
     }
 
-    /// The hand-over chord: puckd ↔ Steam.
+    /// The hand-over chord: puckd ↔ Steam (and games).
     fn handover(&mut self, cfg: &Config) {
         if self.held {
             self.held = false;
@@ -309,24 +345,32 @@ impl Slot {
             self.clone = None;
             return;
         }
-        if c.take_activity() && self.taken_by.is_none() {
-            let who = c.holder().unwrap_or_else(|| "Another program".into());
-            self.take_over(who, cfg, desk);
+        if c.take_activity() && self.client.is_none() {
+            let (name, steam) = c.holder().unwrap_or_else(|| ("A program".into(), false));
+            self.attach(name, steam, cfg, desk);
         }
     }
 
     /// Periodic: notice when the clone's user let go, and keep the clone in sync.
-    pub fn check_passthrough(&mut self, cfg: &Config) {
-        if let (Some(who), Some(c)) = (&self.taken_by, &self.clone)
-            && c.holder().is_none()
-        {
-            info!("{}: {who} let go of the controller", self.label());
-            self.toast = Some(osk::Toast {
-                title: format!("puckd has {}", self.which()),
-                line: osk::ToastLine::Text(format!("{who} let go")),
-                secs: osk::Toast::LONG,
-            });
-            self.give_back(cfg);
+    pub fn check_passthrough(&mut self, cfg: &Config, desk: &mut DesktopDevices) {
+        if let (Some(client), Some(c)) = (&self.client, &self.clone) {
+            match c.holder() {
+                None => {
+                    let (name, took) = (client.name.clone(), client.takes_over);
+                    info!("{}: {name} let go of the controller", self.label());
+                    if took {
+                        self.toast = Some(osk::Toast {
+                            title: format!("puckd has {}", self.which()),
+                            line: osk::ToastLine::Text(format!("{name} let go")),
+                            secs: osk::Toast::NORMAL,
+                        });
+                    }
+                    self.release(cfg);
+                }
+                // Steam joined a game that shares the controller: Steam takes over.
+                Some((name, true)) if !client.takes_over => self.attach(name, true, cfg, desk),
+                Some(_) => {}
+            }
         }
         self.sync_clone(cfg);
     }
@@ -399,7 +443,7 @@ impl Slot {
 
     /// Give lizard mode back to the controller (on exit).
     pub fn restore_lizard(&mut self) {
-        if let (Some(hid), true, false, None) = (&mut self.hid, self.connected, self.backed_off, &self.taken_by) {
+        if let (Some(hid), true, false, None) = (&mut self.hid, self.connected, self.backed_off, &self.client) {
             let _ = hid.write_output(&proto::rumble_report(0, 0));
             let _ = hid.set_feature(&proto::settings_report(&[(proto::SETTING_LIZARD_MODE, proto::LIZARD_MODE_ON)]));
         }
@@ -502,7 +546,7 @@ impl Slot {
         info!("{}: controller disconnected", self.label());
         self.pad = None;
         self.clone = None;
-        self.taken_by = None;
+        self.client = None;
         self.desk.release_all(desk);
         self.switch = SwitchButton::default();
         self.rumble_sent = (0, 0);
@@ -594,7 +638,16 @@ impl Slot {
         (buttons & !bit) | if tapping { bit } else { 0 }
     }
 
-    fn route(&mut self, st: &State, now: Instant, cfg: &Config, desk: &mut DesktopDevices, osk: &mut Overlay) {
+    /// Send a state where it belongs (overlay, desktop mode, gamepad). Returns the buttons
+    /// the game gets in gamepad mode, None when the game should see a neutral controller.
+    fn route(
+        &mut self,
+        st: &State,
+        now: Instant,
+        cfg: &Config,
+        desk: &mut DesktopDevices,
+        osk: &mut Overlay,
+    ) -> Option<u32> {
         let mut s = *st;
         s.buttons = self.filter_switch(st.buttons, now, cfg, desk);
         let osk_bit = btn::from_name(&cfg.general.osk_button).unwrap_or(0);
@@ -625,7 +678,7 @@ impl Slot {
                 // Keep the overlay's view neutral (nothing held) while it waits.
                 osk.input(&State::default(), &State::default());
                 self.last_state = Some(*st);
-                return;
+                return None;
             }
             s.buttons &= !prompt_keys;
         }
@@ -635,17 +688,18 @@ impl Slot {
             raw.buttons &= !self.suppress;
             osk.input(&s, &raw);
             self.last_state = Some(*st);
-            return;
+            return None;
         }
-        match self.mode {
+        let to_game = match self.mode {
             Mode::Gamepad => {
                 if let Some(p) = &mut self.pad
                     && let Err(e) = p.update(&s)
                 {
                     warn!("{}: gamepad write failed: {e}", self.label());
                 }
-                // Xbox profiles have no trackpads: let them drive the mouse instead.
-                if cfg.gamepad.trackpad_mouse && cfg.gamepad.profile != Profile::Extended {
+                // Xbox profiles have no trackpads: let them drive the mouse instead (not when
+                // a game has the native controller, trackpads included).
+                if cfg.gamepad.trackpad_mouse && cfg.gamepad.profile != Profile::Extended && self.client.is_none() {
                     let mut clicks = btn::RPAD_CLICK | btn::LPAD_CLICK;
                     for k in cfg.gamepad.remap.keys() {
                         clicks &= !btn::from_name(k).unwrap_or(0);
@@ -655,6 +709,7 @@ impl Slot {
                         self.feedback(f, cfg, now);
                     }
                 }
+                Some(s.buttons)
             }
             Mode::Desktop => {
                 let out = self.desk.update(&s, now, &cfg.desktop, &cfg.haptics, desk, None);
@@ -667,9 +722,11 @@ impl Slot {
                 if out.toggle_osk {
                     self.toggle_osk(osk, cfg, desk);
                 }
+                None
             }
-        }
+        };
         self.last_state = Some(*st);
+        to_game
     }
 
     pub fn on_hid_readable(
@@ -697,15 +754,23 @@ impl Slot {
                 } else {
                     (st.buttons, false)
                 };
-                if let Some(c) = &mut self.clone {
-                    c.forward(&buf[..n], Some(buttons));
-                }
                 if fire {
                     self.handover(cfg);
                 }
-                if self.taken_by.is_none() {
-                    st.buttons = buttons;
-                    self.route(&st, now, cfg, desk, osk);
+                if self.steam_has_it() {
+                    if let Some(c) = &mut self.clone {
+                        c.forward(&buf[..n], Some(buttons));
+                    }
+                    continue;
+                }
+                // puckd drives: the clone (a game sharing it) gets what a game should get.
+                st.buttons = buttons;
+                let to_game = self.route(&st, now, cfg, desk, osk);
+                if let Some(c) = &mut self.clone {
+                    match to_game {
+                        Some(b) => c.forward(&buf[..n], Some(b)),
+                        None => c.forward_neutral(&buf[..n]),
+                    }
                 }
                 continue;
             }
@@ -762,7 +827,7 @@ impl Slot {
     /// Timers: keepalive, rumble refresh, long-press, taps, inertia.
     pub fn tick(&mut self, now: Instant, cfg: &Config, desk: &mut DesktopDevices, osk: &mut Overlay) {
         // Taken over: Steam keeps lizard mode off and drives the haptics.
-        if self.hid.is_none() || !self.connected || self.taken_by.is_some() {
+        if self.hid.is_none() || !self.connected || self.steam_has_it() {
             return;
         }
         let ka = Duration::from_millis(cfg.general.keepalive_ms.clamp(500, 2900));
@@ -791,7 +856,7 @@ impl Slot {
     }
 
     pub fn next_deadline(&self, now: Instant, cfg: &Config) -> Option<Instant> {
-        if self.hid.is_none() || !self.connected || self.taken_by.is_some() {
+        if self.hid.is_none() || !self.connected || self.steam_has_it() {
             return None;
         }
         let mut d: Vec<Instant> = Vec::new();

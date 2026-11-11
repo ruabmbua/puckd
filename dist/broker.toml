@@ -1,0 +1,8 @@
+# /etc/puckd/broker.toml: who may get the Steam Controller from `puckd broker`.
+# Read on every request; no restart needed.
+
+# Members of this group (add yourself with `sudo usermod -aG puckd $USER`).
+group = "puckd"
+
+# Additionally these users (names or uids).
+users = []
