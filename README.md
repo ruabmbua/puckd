@@ -127,9 +127,9 @@ WAYLAND_DISPLAY` from your compositor's startup.
 By default puckd steps aside whenever Steam or an SDL game opens the controller. In
 exclusive mode only puckd can open the controller. Steam and games get a pass-through copy
 instead, which they drive as a native Steam Controller: gyro, trackpads and haptics work in
-Steam Input and its games. puckd steps aside while they have it, and you hand the controller
-back and forth by holding View + ≡ Menu for a second (see the
-[manual](docs/manual.md#handing-the-controller-over)).
+Steam Input and its games. Steam takes the controller over, and you hand it back and forth
+by holding View + ≡ Menu for a second; games share it with puckd (see the
+[manual](docs/manual.md#exclusive-mode-pass-through)).
 
 It needs a small root helper, `puckd broker`, which opens the devices for your puckd. It is
 socket-activated: systemd starts it when puckd asks for a device, and it exits again after a
