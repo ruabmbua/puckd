@@ -61,8 +61,10 @@ haptics, troubleshooting.
 ## Installation
 
 ```sh
-cargo install --path .        # → ~/.cargo/bin/puckd (or copy target/release/puckd to ~/.local/bin)
+cargo build --release
 ```
+
+Then install `target/release/puckd` into a directory in your `PATH`.
 
 Permissions: puckd runs as your user. The udev rule gives the logged-in user access to the
 Puck and to `/dev/uinput`:

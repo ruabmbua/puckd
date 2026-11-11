@@ -11,7 +11,7 @@ install -Dm644 dist/puckd.desktop ~/.config/autostart/puckd.desktop
 ```
 
 Or use *System Settings → Autostart → Add… → Add Application*. If puckd isn't in the
-session's `PATH` (e.g. `~/.cargo/bin` or `~/.local/bin`), put the full path in `Exec=`.
+session's `PATH`, put the full path in `Exec=`.
 
 Instead of autostart you can also use the [systemd user service](../README.md#alternative-systemd-user-service).
 

@@ -19,7 +19,7 @@ Older Hyprland (`hyprland.conf`):
 exec-once = puckd
 ```
 
-Use the full path if puckd isn't in Hyprland's `PATH` (e.g. `~/.local/bin/puckd`).
+Use the full path to puckd if it isn't in Hyprland's `PATH`.
 Instead you can also use the [systemd user service](../README.md#alternative-systemd-user-service).
 
 ## Turn off pointer acceleration for puckd's mouse
