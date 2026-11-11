@@ -242,6 +242,15 @@ pub fn haptic_test(args: &[String]) -> ExitCode {
 /// touches show both cursors; events (typed keys) are printed, not typed.
 pub fn osk_preview(args: &[String]) -> ExitCode {
     use crate::osk::{Overlay, Tab, menu};
+    if let Some(i) = args.iter().position(|a| a == "--script") {
+        return match args.get(i + 1) {
+            Some(path) => crate::demo::run(std::path::Path::new(path)),
+            None => {
+                eprintln!("--script needs a file");
+                ExitCode::from(2)
+            }
+        };
+    }
     let tab = match args
         .iter()
         .find(|a| a.parse::<u64>().is_err() && !matches!(a.as_str(), "prompt" | "capture" | "list" | "name" | "toast"))

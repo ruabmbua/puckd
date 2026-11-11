@@ -13,7 +13,9 @@ native Wayland windows, which Steam's own desktop mode can't reach on some compo
 
 License: [GPL-2.0](LICENSE).
 
-![On-screen keyboard and settings overlay](docs/img/keyboard.png)
+![Showreel: mode switch, on-screen keyboard, settings, presets, button mapping, input test](docs/img/showreel.gif)
+
+*The captions at the bottom right show the controller buttons used.*
 
 **[User manual](docs/manual.md)**: modes, buttons, the overlay, presets, button mapping,
 haptics, troubleshooting.

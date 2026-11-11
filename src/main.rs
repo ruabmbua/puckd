@@ -4,6 +4,7 @@ mod backoff;
 mod config;
 mod controller;
 mod daemon;
+mod demo;
 mod desktop;
 mod ff;
 mod gamepad;
@@ -36,6 +37,7 @@ USAGE:
     puckd haptic-sides [SLOT]        play tick/click on each raw haptic side value (0..3)
     puckd mouse-study                guided recording session for tuning the trackpad mouse
     puckd osk-preview [settings|mapping|presets|input] [prompt|capture|list|name|toast] [SECS]
+    puckd osk-preview --script FILE  drive the overlay with a scripted controller (docs/demo)
                                      show the on-screen keyboard overlay without a controller
     puckd pad-preview [PROFILE] [SECS]
                                      create a profile's virtual pad (X and L4 blink, LT ramps)
