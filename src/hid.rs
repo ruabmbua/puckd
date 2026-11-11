@@ -107,7 +107,7 @@ pub fn parse_report_descriptor(d: &[u8]) -> ReportIds {
     r
 }
 
-fn parse_uevent(text: &str) -> (Option<(u16, u16, u16)>, String, String, String) {
+pub fn parse_uevent(text: &str) -> (Option<(u16, u16, u16)>, String, String, String) {
     let (mut id, mut uniq, mut phys, mut name) = (None, String::new(), String::new(), String::new());
     for line in text.lines() {
         if let Some(v) = line.strip_prefix("HID_ID=") {

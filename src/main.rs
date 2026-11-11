@@ -11,6 +11,7 @@ mod gamepad;
 mod hid;
 mod keys;
 mod osk;
+mod passthrough;
 mod presets;
 mod proto;
 mod status;
@@ -42,6 +43,9 @@ USAGE:
     puckd pad-preview [PROFILE] [SECS]
                                      create a profile's virtual pad (X and L4 blink, LT ramps)
     puckd check-config [-c FILE]     validate the config file
+    puckd uhid-clone [--bus usb|ble|virtual] [--pid HEX] [--log-input] all|hidrawN...
+                                     experimental: clone hidraw nodes via uhid, forward both
+                                     ways and log what Steam & co send (run as root)
 
 OPTIONS:
     -c, --config FILE   config file (default: $XDG_CONFIG_HOME/puckd.toml)
@@ -141,6 +145,10 @@ fn main() -> ExitCode {
         "osk-preview" => {
             sys::install_signal_handlers();
             tools::osk_preview(&rest)
+        }
+        "uhid-clone" => {
+            sys::install_signal_handlers();
+            passthrough::run(&rest)
         }
         "check-config" => match load() {
             Ok(_) => {
