@@ -13,7 +13,14 @@ and the setup page for your desktop.
   - [Button mapping](#button-mapping)
   - [Input test](#input-test)
 - [Haptics](#haptics)
-- [When Steam is running](#when-steam-is-running)
+- [Steam, Steam Input and games](#steam-steam-input-and-games)
+  - [Standard: puckd steps aside](#standard-puckd-steps-aside)
+  - [Exclusive mode: pass-through](#exclusive-mode-pass-through)
+  - [Steam takes over](#steam-takes-over)
+  - [Handing the controller over](#handing-the-controller-over)
+  - [Games share the controller](#games-share-the-controller)
+  - [Banners](#banners)
+  - [Settings](#settings)
 - [Troubleshooting](#troubleshooting)
 
 ## Modes
@@ -201,36 +208,126 @@ go back. QAM always opens and closes the overlay, so it can't be tested here.
 
 Turn them off or down under *Haptics* in the Controller tab (or `[haptics]` in the config).
 
-## When Steam is running
+## Steam, Steam Input and games
 
-puckd steps aside while Steam (or a game that drives the Steam Controller itself, through
-SDL3) has the controller open: its virtual devices go away and the other program has the
-controller to itself. When it closes the controller, puckd takes over again. Set
-*Step aside for* to *steam* to step aside only for Steam, or *never*.
+The Steam Controller has its own protocol, and Steam (through Steam Input) and some games
+(through SDL3) speak it natively: gyro, both trackpads, haptics, the Steam button. puckd
+works alongside them in one of two ways.
 
-**Exclusive mode** (experimental; [setup](../README.md#optional-exclusive-mode-with-pass-through-for-steam-experimental)):
-only puckd opens the controller. Steam and games see a pass-through copy of it, a native
-Steam Controller with gyro, trackpads and haptics.
+### Standard: puckd steps aside
 
-- **Steam takes over.** When Steam starts using the copy, puckd steps aside and a banner says
-  so: "Steam has the controller · Hold View + ≡ Menu for puckd". Steam Input then handles
-  every button, including its own long-press and Steam-button features.
-- **Games share.** A game that drives the Steam Controller itself (SDL3) gets the native
-  controller in gamepad mode, but puckd keeps its buttons: QAM opens the overlay, holding ≡
-  switches modes (a short press still reaches the game). In desktop mode or with the overlay
-  open, the game sees the controller at rest. puckd's own virtual gamepad goes away while
-  the game has the native one, so the game doesn't see two controllers. If Steam joins,
-  Steam takes over.
-- When Steam or the game lets go, puckd resets the controller's settings to the firmware
-  defaults and applies its own.
-- **Hold View + ≡ Menu for a second** to take the controller back: Steam sees it unplugged,
-  and puckd's modes and overlay work again. Hold it again to let Steam have it back.
-- These two buttons are held back for a moment when pressed alone, in case the other one
-  follows; a quick tap still goes through.
-- When Steam closes, puckd takes the controller back by itself.
-- *Steam and games may take over* in the Controller tab (`passthrough = false`) turns the
-  copy off: Steam and games then never see the controller. `handover_buttons` changes the
-  chord.
+Out of the box, every program running as you may open the controller. When Steam (or a game
+that drives the Steam Controller itself) opens it, puckd steps aside: its virtual gamepad,
+mouse and keyboard go away and the other program has the controller to itself. When it
+closes the controller, puckd takes over again within a couple of seconds.
+
+*Step aside for* in the Controller tab (`backoff` in the config) picks for whom: *any*
+program (default), only *Steam*, or *never* (then both drive the controller at once, which
+you rarely want).
+
+This needs no setup, but puckd and Steam take turns rather than cooperate: while Steam has
+the controller, puckd's overlay and mode switch are gone, and Steam's own desktop mode
+doesn't reach native Wayland windows on some compositors.
+
+### Exclusive mode: pass-through
+
+*Experimental. Setup: [README](../README.md#optional-exclusive-mode-with-pass-through-for-steam-experimental).*
+
+In exclusive mode only puckd opens the controller (a small root helper, `puckd broker`,
+hands it over; nothing else running as you can open it). puckd then gives Steam and games a
+**pass-through copy**: a virtual Steam Controller that behaves like the real one, because
+puckd forwards every report to it and every request from it to the real controller.
+
+- The copy appears when a controller connects and disappears when it disconnects. A
+  controller on the Puck looks like a wired controller to Steam; wired and Bluetooth
+  controllers look like themselves.
+- Steam lists it as a Steam Controller: its settings, calibration, gyro, trackpads and
+  haptics all work, and games launched from Steam get them through Steam Input.
+- puckd decides who gets the input, depending on who uses the copy: Steam takes over,
+  everything else shares.
+
+You notice nothing of this until Steam or a game starts using the copy: until then puckd
+works as usual.
+
+### Steam takes over
+
+When Steam starts using the copy, puckd steps aside completely and shows a banner:
+
+> **Steam has the controller**
+> Hold View + ≡ Menu for puckd
+
+From then on Steam handles every button, including its own long-press and Steam-button
+features, its desktop configuration and its overlay. puckd's virtual gamepad goes away (games
+see Steam's virtual controller instead), its desktop mode and overlay rest, and it no longer
+touches the controller's settings.
+
+When Steam quits, puckd takes the controller back by itself ("puckd has the controller ·
+Steam let go") and resets the controller's settings, which Steam changes, to the firmware
+defaults before applying its own.
+
+### Handing the controller over
+
+**Hold View (⧉, left) and ≡ Menu (right) together for a second** to switch between Steam
+and puckd:
+
+- **While Steam has the controller**: puckd takes it back. Steam sees the controller
+  unplugged; puckd's modes, overlay and virtual gamepad work again. Banner: "puckd has the
+  controller · Hold View + ≡ Menu to hand it to Steam".
+- **While puckd keeps it**: the copy comes back and Steam takes it over again (if Steam
+  runs). Banner: "Steam and games may take it".
+
+puckd keeps the controller until you hand it back with the same buttons, even if it
+disconnects and reconnects in between.
+
+The two buttons are never seen by Steam or games while you hold them together. Pressed
+alone, each is held back for a moment (80 ms) in case the other follows; a quick tap still
+goes through, as a short press.
+
+`handover_buttons` in the config picks other buttons (e.g. `"l4+r4"`).
+
+### Games share the controller
+
+A game that drives the Steam Controller itself (through SDL3, without Steam Input) gets the
+copy too, but doesn't take over. It shares the controller with puckd:
+
+- **Gamepad mode**: the game gets the native controller: gyro, trackpads, haptics, every
+  button except puckd's own. QAM still opens puckd's overlay, holding ≡ still switches
+  modes (a short ≡ press reaches the game as Start).
+- **Desktop mode, or the overlay open**: the game sees the controller at rest, while you use
+  the mouse, keyboard or overlay.
+- puckd's own virtual gamepad goes away while the game has the native controller, so the
+  game doesn't see two controllers. puckd's trackpad mouse in gamepad mode rests too: the
+  game has the trackpads.
+
+A short banner says so: "*game* uses the controller · Native controller in gamepad mode".
+When the game quits, puckd's virtual gamepad comes back. If Steam starts using the copy
+while a game shares it, Steam takes over.
+
+Games that only know ordinary gamepads never open the copy; they keep using puckd's virtual
+gamepad as before.
+
+### Banners
+
+| Banner | When |
+|---|---|
+| *Steam has the controller* · Hold View + ≡ Menu for puckd | Steam took over |
+| *puckd has the controller* · Hold View + ≡ Menu to hand it to Steam | you took it back |
+| *Steam and games may take it* · Hold View + ≡ Menu to keep it in puckd | you handed it back |
+| *puckd has the controller* · Steam let go | Steam quit |
+| *game* uses the controller · Native controller in gamepad mode | a game shares it |
+
+Banners with the hand-over buttons stay up for six seconds.
+
+### Settings
+
+| Setting | Where | Effect |
+|---|---|---|
+| *Steam and games may take over* | Controller tab, `passthrough` | Off: no copy; Steam and games never see the controller (puckd's virtual gamepad only). |
+| `handover_buttons` | config, `[general]` | The hand-over buttons, default `"view+menu"`. |
+| *Step aside for* | Controller tab, `backoff` | Only without exclusive mode (see above). |
+
+Who may use exclusive mode is set in `/etc/puckd/broker.toml` (default: members of the
+`puckd` group).
 
 ## Troubleshooting
 
@@ -240,5 +337,7 @@ Steam Controller with gyro, trackpads and haptics.
 | Pointer speed feels inconsistent | Turn off your desktop's pointer acceleration for "puckd Mouse" (setup page for your desktop). |
 | The overlay doesn't appear | Your compositor needs wlr-layer-shell (not available on GNOME). Run `puckd -v` and look for "overlay". |
 | A game sees two controllers | Is Steam Input or another driver also active? puckd steps aside when Steam opens the controller. |
+| Steam doesn't list the controller (exclusive mode) | `puckd -v` should log "pass-through device" when the controller connects. Did you hand it to puckd (View + ≡ Menu)? Hold the buttons again. |
+| Exclusive mode: "permission denied" | Is `puckd-broker.socket` running, and are you in the `puckd` group (`/etc/puckd/broker.toml`)? `journalctl -u puckd-broker` shows refused requests. |
 | Buttons are mixed up in one game | Make a preset for it, try another emulated controller, or remap buttons. |
 | Check what the controller sends | Overlay → Controller → Input test, or `puckd dump` in a terminal. |

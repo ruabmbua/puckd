@@ -1,9 +1,10 @@
 # puckd
 
 Userspace driver for the 2nd-gen Steam Controller (2026) and its "Puck" dongle
-(`28de:1304`), without Steam. It creates real input devices (uinput), so the controller
-works as a gamepad in games and as mouse and keyboard on any Wayland desktop, including
-native Wayland windows, which Steam's own desktop mode can't reach on some compositors.
+(`28de:1304`), with or without Steam. It creates real input devices (uinput), so the
+controller works as a gamepad in games and as mouse and keyboard on any Wayland desktop,
+including native Wayland windows, which Steam's own desktop mode can't reach on some
+compositors. When Steam runs, Steam Input gets the real controller and puckd steps aside.
 
 > **Disclaimer:** this project was almost entirely "vibe coded": written by an AI coding
 > assistant (Claude) in conversation with its author, who tested it on real hardware and
@@ -33,8 +34,14 @@ haptics, troubleshooting.
   settings menu: presets, button mapping (press the button to map it), input test,
   controller names, live settings.
 - **Presets** per game, optionally switched automatically when an app gets focus.
-- **Steps aside** while Steam (or an SDL3 game with native Steam Controller support) uses
-  the controller, and takes over again afterwards.
+- **Seamless Steam / Steam Input interaction**: by default puckd steps aside while Steam
+  (or an SDL3 game with native Steam Controller support) uses the controller. In the
+  optional exclusive mode, puckd owns the hardware and gives Steam a native pass-through
+  controller (gyro, trackpads, haptics, Steam button): Steam takes it over when it starts,
+  and holding View + ≡ hands the controller back and forth between Steam and puckd. Games
+  that drive the controller themselves share it with puckd: native input in gamepad mode,
+  while puckd's overlay and mode switch keep working.
+  See [the manual](docs/manual.md#steam-steam-input-and-games).
 
 ## Requirements and compatibility
 
@@ -122,7 +129,7 @@ exclusive mode only puckd can open the controller. Steam and games get a pass-th
 instead, which they drive as a native Steam Controller: gyro, trackpads and haptics work in
 Steam Input and its games. puckd steps aside while they have it, and you hand the controller
 back and forth by holding View + ≡ Menu for a second (see the
-[manual](docs/manual.md#when-steam-is-running)).
+[manual](docs/manual.md#handing-the-controller-over)).
 
 It needs a small root helper, `puckd broker`, which opens the devices for your puckd. It is
 socket-activated: systemd starts it when puckd asks for a device, and it exits again after a
@@ -245,6 +252,7 @@ puckd power-off [SLOT]        # turn a controller off
 - **Gyro isn't visible to SDL games**: SDL pairs the motion device with the pad through the
   evdev `uniq` string, which uinput can't set. A UHID-based (virtual DualSense) profile
   would fix it; see [PLAN.md](PLAN.md).
-- `general.backoff = "any"` also steps aside for SDL3 games that drive the controller
-  themselves (they then get the full controller). Use `"steam"` to step aside only for Steam.
+- Without exclusive mode, `general.backoff = "any"` also steps aside for SDL3 games that
+  drive the controller themselves (they then get the full controller). Use `"steam"` to
+  step aside only for Steam. In exclusive mode such games share the controller instead.
 - Not yet tested on kernel 7.3+, where the kernel's `hid-steam` handles this controller too.
