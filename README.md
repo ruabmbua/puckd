@@ -39,7 +39,8 @@ haptics, troubleshooting.
 **System**
 - Linux with `hidraw` and `uinput` (tested on kernel 7.2), and the Puck dongle `28de:1304`.
   A wired (`28de:1302`) or Bluetooth (`28de:1303`) controller should work but is untested.
-- Read/write access to the Puck's hidraw nodes and `/dev/uinput` (the included udev rule).
+- Read/write access to the Puck's hidraw nodes and `/dev/uinput` (Steam's udev rules or the
+  included one).
 - Rust (edition 2024) to build; fontconfig and a sans font for the overlay.
 
 **Desktop**: gamepad and desktop modes only need uinput, so they work under any compositor
@@ -66,13 +67,20 @@ cargo build --release
 
 Then install `target/release/puckd` into a directory in your `PATH`.
 
-Permissions: puckd runs as your user. The udev rule gives the logged-in user access to the
-Puck and to `/dev/uinput`:
+Permissions: puckd runs as your user and needs access to the Puck's hidraw nodes and to
+`/dev/uinput`. If Steam is installed, you probably have both already: Valve's udev rules
+(package `steam-devices`, on some distros `steam-udev`) give the logged-in user access to
+all Valve controllers and to `/dev/uinput`. Check:
+
+```sh
+puckd list                    # every slot should say "rw ok"
+```
+
+If not, install puckd's rule (same idea, limited to the Puck and the controller):
 
 ```sh
 sudo install -m644 dist/70-puckd.rules /etc/udev/rules.d/
-sudo udevadm control --reload && sudo udevadm trigger
-puckd list                    # every slot should say "rw ok" (replug the Puck if not)
+sudo udevadm control --reload && sudo udevadm trigger   # then replug the Puck
 ```
 
 Run exactly one puckd: it drives every controller and every dongle slot.

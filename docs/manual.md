@@ -207,7 +207,7 @@ controller to itself. When it closes the controller, puckd takes over again. Set
 
 | Problem | Try |
 |---|---|
-| Nothing happens | `puckd list`: every slot should say "rw ok". If not, install the udev rule and replug the Puck. |
+| Nothing happens | `puckd list`: every slot should say "rw ok". If not, install Steam's udev rules (`steam-devices`) or puckd's rule, then replug the Puck. |
 | Pointer speed feels inconsistent | Turn off your desktop's pointer acceleration for "puckd Mouse" (setup page for your desktop). |
 | The overlay doesn't appear | Your compositor needs wlr-layer-shell (not available on GNOME). Run `puckd -v` and look for "overlay". |
 | A game sees two controllers | Is Steam Input or another driver also active? puckd steps aside when Steam opens the controller. |
