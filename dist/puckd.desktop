@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=puckd
+Comment=Steam Controller (2026) / Puck driver: gamepad, mouse, on-screen keyboard
+# Use the full path if ~/.cargo/bin is not in the session's PATH.
+Exec=puckd
+Terminal=false
+NoDisplay=true
+X-KDE-autostart-phase=2

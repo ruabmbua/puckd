@@ -1,0 +1,10 @@
+# puckd: give the logged-in user access to the Steam Controller (2026) hidraw nodes
+# (Puck dongle 28de:1304/1305, wired 28de:1302) and to /dev/uinput.
+# Install: sudo install -m644 dist/70-puckd.rules /etc/udev/rules.d/ && sudo udevadm control --reload && sudo udevadm trigger
+# (must sort before 73-seat-late.rules so "uaccess" takes effect)
+
+KERNEL=="hidraw*", ATTRS{idVendor}=="28de", ATTRS{idProduct}=="1302|1304|1305", TAG+="uaccess"
+# Bluetooth LE controller (28de:1303)
+KERNEL=="hidraw*", KERNELS=="*:28DE:1303.*", TAG+="uaccess"
+
+KERNEL=="uinput", SUBSYSTEM=="misc", TAG+="uaccess", OPTIONS+="static_node=uinput"

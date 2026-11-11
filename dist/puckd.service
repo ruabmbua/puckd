@@ -1,0 +1,13 @@
+[Unit]
+Description=puckd - Steam Controller (2026) / Puck userspace driver
+Documentation=file://%h/.config/puckd.toml
+
+[Service]
+Type=simple
+ExecStart=%h/.cargo/bin/puckd
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

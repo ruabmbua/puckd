@@ -1,0 +1,90 @@
+# puckd configuration: copy to ~/.config/puckd.toml. Every key is optional.
+# Reload a running daemon with: systemctl --user reload puckd   (or: pkill -HUP puckd)
+#
+# Button names (as `puckd dump` prints them; menu = right center ≡, view = left center ⧉):
+#   a b x y lb rb l3 r3 menu view steam qam l4 l5 r4 r5
+#   dpad_up dpad_down dpad_left dpad_right lpad_click rpad_click lt_click rt_click
+#   lpad_touch rpad_touch lstick_touch rstick_touch lgrip_touch rgrip_touch
+
+[general]
+start_mode = "desktop"     # "desktop" or "gamepad"
+switch_button = "menu"     # hold this to switch modes; a short press still goes through
+switch_hold_ms = 600
+osk_button = "qam"         # opens/closes the on-screen keyboard + settings overlay ("none" = off)
+backoff = "any"            # "any": step aside when any other program opens the controller
+                           # (Steam, SDL3 games with native support); "steam"; "never"
+backoff_check_ms = 2000
+keepalive_ms = 2000        # must stay below the ~3 s firmware watchdog
+preset_switch = "ask"      # an app with a preset gets focus: "ask" (popup), "auto", "off"
+
+# [gamepad] is the "Default" preset: how games see the controller. Named presets (made in
+# the overlay) hold the same keys and live in ~/.config/puckd/presets/. All other sections
+# are settings shared by every preset.
+[gamepad]
+# "xbox360"    Microsoft X-Box 360 pad (045e:028e), the most compatible choice
+# "xbox-elite" Xbox One Elite 2 pad (045e:0b00): adds the four back paddles
+# "extended"   Steam Deck controller layout (28de:1205): paddles, QAM, trigger and pad
+#              clicks, analog trackpads, capacitive touches, plus a motion sensor device
+profile = "xbox360"
+motion = "auto"            # motion sensor device: "auto" (extended only), "on", "off"
+rumble_strength = 1.0
+rumble_swap = false
+trackpad_mouse = true      # Xbox profiles: trackpads still move the mouse / scroll in gamepad mode
+# name = "My Pad"          # override the device name
+
+[gamepad.remap]
+# Make the back paddles act as other buttons (useful with the xbox360 profile):
+# l4 = "y"
+# r4 = "a"
+# qam = "none"
+
+
+[desktop]
+pointer_speed = 1.0
+pointer_accel = 1.0
+smoothing = 0.4            # 0..0.95
+inertia = true
+inertia_friction = 6.0
+scroll_speed = 1.0
+natural_scroll = false
+horizontal_scroll = true
+stick_pointer_speed = 1200.0   # right stick, px/s at full tilt (0 = off)
+stick_scroll_speed = 5.0       # left stick, wheel notches/s at full tilt (0 = off)
+stick_deadzone = 0.15
+trigger_threshold = 0.45
+click_suppress_ms = 60
+gyro_mouse = false             # gyro moves the pointer while a grip is touched
+gyro_speed = 12.0              # px per degree
+
+[desktop.buttons]
+# Value: key combo ("ctrl+c", "KEY_F5", "super"), mouse button ("BTN_LEFT",
+# "mouse_back"), "mode" (switch to gamepad mode), "osk" (on-screen keyboard) or "none".
+# "lt"/"rt" are the analog triggers. Defaults:
+# rpad_click = "BTN_LEFT"
+# rt = "BTN_LEFT"
+# lt = "BTN_RIGHT"
+# lpad_click = "BTN_MIDDLE"
+# a = "KEY_ENTER"
+# b = "KEY_ESC"
+# x = "KEY_BACKSPACE"
+# y = "KEY_SPACE"
+# dpad_up = "KEY_UP"
+# dpad_down = "KEY_DOWN"
+# dpad_left = "KEY_LEFT"
+# dpad_right = "KEY_RIGHT"
+# lb = "BTN_SIDE"
+# rb = "BTN_EXTRA"
+# view = "KEY_TAB"
+# l3 = "KEY_LEFTMETA"
+# r3 = "BTN_MIDDLE"
+steam = "none"
+qam = "none"
+
+[haptics]
+enabled = true
+mode_switch = true
+pointer_ticks = true
+tick_distance = 60.0       # px of pointer travel per tick
+scroll_ticks = true
+pad_clicks = true
+gain_db = 0

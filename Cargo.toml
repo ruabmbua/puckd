@@ -1,0 +1,16 @@
+[package]
+name = "puckd"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+env_logger = "0.11.11"
+fontdue = "0.9.5"
+libc = "0.2.191"
+log = "0.4.35"
+serde = { version = "1.0.229", features = ["derive"] }
+smithay-client-toolkit = { version = "0.21.1", default-features = false, features = ["calloop", "xkbcommon"] }
+tiny-skia = "0.12.0"
+toml = "1.2.1"
+toml_edit = "0.25.19"
+xkbcommon = { version = "0.8", default-features = false }
