@@ -67,7 +67,10 @@ haptics, troubleshooting.
 cargo build --release
 ```
 
-Then install `target/release/puckd` into a directory in your `PATH`.
+Then install `target/release/puckd` into a directory in the `PATH` that your session's
+autostart (or systemd) sees, such as `/usr/local/bin`. Your shell's `PATH` isn't enough:
+directories that only your shell profile adds (`~/.local/bin`, `~/.cargo/bin`) are usually
+missing there, and then puckd silently doesn't start. Elsewhere, use the full path.
 
 Permissions: puckd runs as your user and needs access to the Puck's hidraw nodes and to
 `/dev/uinput`. If Steam is installed, you probably have both already: Valve's udev rules
