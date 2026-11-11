@@ -110,8 +110,9 @@ impl Clone {
     pub fn serve(&mut self, hid: &mut HidDevice) -> io::Result<()> {
         while let Some(ev) = self.dev.read_event()? {
             match ev {
-                Event::Output { rtype, data } => {
+                Event::Output { rtype, mut data } => {
                     self.activity = true;
+                    keep_lizard_off(&mut data);
                     let r = if rtype == uhid::FEATURE_REPORT {
                         hid.set_report(rtype, &data)
                     } else {
@@ -129,8 +130,9 @@ impl Clone {
                         Err(e) => self.dev.get_report_reply(id, Err(e.raw_os_error().unwrap_or(libc::EIO)))?,
                     }
                 }
-                Event::SetReport { id, rtype, data, .. } => {
+                Event::SetReport { id, rtype, mut data, .. } => {
                     self.activity = true;
+                    keep_lizard_off(&mut data);
                     let errno = match hid.set_report(rtype, &data) {
                         Ok(()) => 0,
                         Err(e) => e.raw_os_error().unwrap_or(libc::EIO),
@@ -148,14 +150,38 @@ impl Clone {
         std::mem::take(&mut self.activity)
     }
 
-    /// Who holds the clone open: (name, is Steam), Steam preferred. None when nobody does.
-    pub fn holder(&self) -> Option<(String, bool)> {
+    /// Who holds the clone open, Steam preferred. None when nobody does.
+    pub fn holder(&self) -> Option<Holder> {
         let dev = self.dev_path()?;
         let openers = crate::backoff::openers(std::slice::from_ref(&dev));
         let list = openers.get(&dev)?;
         let o = list.iter().find(|o| o.is_steam()).or_else(|| list.first())?;
-        Some(if o.is_steam() { ("Steam".into(), true) } else { (o.comm.clone(), false) })
+        let steam = o.is_steam();
+        Some(Holder { name: if steam { "Steam".into() } else { o.comm.clone() }, steam, pid: o.pid })
     }
+}
+
+/// puckd owns lizard mode: a client's SET_SETTINGS_VALUES that turns it on is turned
+/// into "off" (its other settings go through).
+fn keep_lizard_off(data: &mut [u8]) {
+    if data.len() < 3 || data[0] != 1 || data[1] != proto::ID_SET_SETTINGS_VALUES {
+        return;
+    }
+    let end = (3 + data[2] as usize).min(data.len());
+    let mut o = 3;
+    while o + 3 <= end {
+        if data[o] == proto::SETTING_LIZARD_MODE {
+            data[o + 1..o + 3].copy_from_slice(&proto::LIZARD_MODE_OFF.to_le_bytes());
+        }
+        o += 3;
+    }
+}
+
+/// A process using the clone.
+pub struct Holder {
+    pub name: String,
+    pub steam: bool,
+    pub pid: u32,
 }
 
 /// Zero the inputs of a state report (0x42/0x45/0x47), keeping sequence and timestamps.
@@ -492,6 +518,17 @@ mod tests {
             _ => panic!(),
         };
         assert_eq!((st.buttons, st.lx, st.rpad_pressure, st.gyro), (0, 0, 0, [0; 3]));
+    }
+
+    #[test]
+    fn clients_cannot_turn_lizard_mode_on() {
+        let mut r =
+            proto::settings_report(&[(0x30, 0x18), (proto::SETTING_LIZARD_MODE, proto::LIZARD_MODE_ON)]).to_vec();
+        keep_lizard_off(&mut r);
+        assert_eq!(r, proto::settings_report(&[(0x30, 0x18), (proto::SETTING_LIZARD_MODE, proto::LIZARD_MODE_OFF)]));
+        let mut other = vec![1, 0x83, 0, 9, 1, 0];
+        keep_lizard_off(&mut other);
+        assert_eq!(other, [1, 0x83, 0, 9, 1, 0]);
     }
 
     #[test]

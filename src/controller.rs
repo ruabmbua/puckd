@@ -76,12 +76,16 @@ pub struct Slot {
     client: Option<Client>,
     /// The user kept the controller in puckd with the hand-over chord: no clone.
     held: bool,
+    /// ... from this process (Steam): when it exits, the clone comes back for the next one.
+    /// None: until the chord again.
+    held_from: Option<u32>,
     chord: Chord,
 }
 
 /// A program using the pass-through clone.
 struct Client {
     name: String,
+    pid: u32,
     /// Steam: Steam Input does what puckd does (modes, menus, mouse), so puckd steps aside
     /// completely until the hand-over chord. Other programs (SDL games) share: they get
     /// the native controller in gamepad mode, while puckd keeps its buttons, desktop mode
@@ -138,6 +142,7 @@ impl Slot {
             clone: None,
             client: None,
             held: false,
+            held_from: None,
             chord: Chord::new(chord_bits(cfg)),
         })
     }
@@ -262,7 +267,8 @@ impl Slot {
     }
 
     /// A program started using the clone. Steam takes over; others share.
-    fn attach(&mut self, name: String, takes_over: bool, cfg: &Config, desk: &mut DesktopDevices) {
+    fn attach(&mut self, who: passthrough::Holder, cfg: &Config, desk: &mut DesktopDevices) {
+        let passthrough::Holder { name, steam: takes_over, pid } = who;
         // Its native controller replaces our pad (else it sees two).
         if let Some(p) = &mut self.pad {
             let _ = p.neutral();
@@ -286,7 +292,7 @@ impl Slot {
                 secs: osk::Toast::NORMAL,
             });
         }
-        self.client = Some(Client { name, takes_over });
+        self.client = Some(Client { name, pid, takes_over });
         self.write_status();
     }
 
@@ -318,6 +324,7 @@ impl Slot {
     fn handover(&mut self, cfg: &Config) {
         if self.held {
             self.held = false;
+            self.held_from = None;
             self.sync_clone(cfg);
             info!("{}: controller offered to Steam and games again", self.label());
             self.toast = Some(osk::Toast {
@@ -326,12 +333,27 @@ impl Slot {
                 secs: osk::Toast::LONG,
             });
         } else {
+            // Cut off from the current user of the clone only: when that process exits, the
+            // clone comes back (else a restarted Steam would never get the controller).
+            let from = self.client.as_ref().map(|c| (c.pid, c.name.clone()));
             self.held = true;
+            self.held_from = from.as_ref().map(|f| f.0);
             self.sync_clone(cfg);
-            info!("{}: controller kept in puckd", self.label());
+            info!(
+                "{}: controller kept in puckd{}",
+                self.label(),
+                match &from {
+                    Some((pid, name)) => format!(" while {name} (pid {pid}) runs"),
+                    None => String::new(),
+                }
+            );
+            let line = match from {
+                Some((_, name)) => format!("Until {name} restarts, or hold {}", chord_label(cfg)),
+                None => format!("Hold {} to hand it to Steam", chord_label(cfg)),
+            };
             self.toast = Some(osk::Toast {
                 title: format!("puckd has {}", self.which()),
-                line: osk::ToastLine::Text(format!("Hold {} to hand it to Steam", chord_label(cfg))),
+                line: osk::ToastLine::Text(line),
                 secs: osk::Toast::LONG,
             });
         }
@@ -346,13 +368,22 @@ impl Slot {
             return;
         }
         if c.take_activity() && self.client.is_none() {
-            let (name, steam) = c.holder().unwrap_or_else(|| ("A program".into(), false));
-            self.attach(name, steam, cfg, desk);
+            let who =
+                c.holder().unwrap_or_else(|| passthrough::Holder { name: "A program".into(), steam: false, pid: 0 });
+            self.attach(who, cfg, desk);
         }
     }
 
     /// Periodic: notice when the clone's user let go, and keep the clone in sync.
     pub fn check_passthrough(&mut self, cfg: &Config, desk: &mut DesktopDevices) {
+        // The program the controller was taken back from has exited: offer it again.
+        if let Some(pid) = self.held_from
+            && !std::path::Path::new(&format!("/proc/{pid}")).exists()
+        {
+            info!("{}: pid {pid} exited, offering the controller to Steam and games again", self.label());
+            self.held = false;
+            self.held_from = None;
+        }
         if let (Some(client), Some(c)) = (&self.client, &self.clone) {
             match c.holder() {
                 None => {
@@ -368,7 +399,7 @@ impl Slot {
                     self.release(cfg);
                 }
                 // Steam joined a game that shares the controller: Steam takes over.
-                Some((name, true)) if !client.takes_over => self.attach(name, true, cfg, desk),
+                Some(h) if h.steam && !client.takes_over => self.attach(h, cfg, desk),
                 Some(_) => {}
             }
         }
@@ -437,6 +468,15 @@ impl Slot {
             settings.push((proto::SETTING_IMU_MODE, proto::IMU_MODE_RAW_ACCEL_GYRO));
         }
         if let Err(e) = hid.set_feature(&proto::settings_report(&settings)) {
+            debug!("{}: keepalive failed: {e}", self.info.node);
+        }
+    }
+
+    fn send_lizard_off(&mut self) {
+        let Some(hid) = &mut self.hid else { return };
+        if let Err(e) =
+            hid.set_feature(&proto::settings_report(&[(proto::SETTING_LIZARD_MODE, proto::LIZARD_MODE_OFF)]))
+        {
             debug!("{}: keepalive failed: {e}", self.info.node);
         }
     }
@@ -826,12 +866,22 @@ impl Slot {
 
     /// Timers: keepalive, rumble refresh, long-press, taps, inertia.
     pub fn tick(&mut self, now: Instant, cfg: &Config, desk: &mut DesktopDevices, osk: &mut Overlay) {
-        // Taken over: Steam keeps lizard mode off and drives the haptics.
-        if self.hid.is_none() || !self.connected || self.steam_has_it() {
+        if self.hid.is_none() || !self.connected {
             return;
         }
         let ka = Duration::from_millis(cfg.general.keepalive_ms.clamp(500, 2900));
-        if self.last_keepalive.is_none_or(|t| now.duration_since(t) >= ka) {
+        let keepalive_due = self.last_keepalive.is_none_or(|t| now.duration_since(t) >= ka);
+        if self.steam_has_it() {
+            // Steam drives everything else, but lizard mode stays off even when Steam stops
+            // sending its keepalive while it shuts down (the firmware brings lizard mode
+            // back after ~3 s without one, before we notice that Steam let go).
+            if keepalive_due {
+                self.send_lizard_off();
+                self.last_keepalive = Some(now);
+            }
+            return;
+        }
+        if keepalive_due {
             self.send_settings(cfg);
             self.last_keepalive = Some(now);
         }
@@ -856,12 +906,15 @@ impl Slot {
     }
 
     pub fn next_deadline(&self, now: Instant, cfg: &Config) -> Option<Instant> {
-        if self.hid.is_none() || !self.connected || self.steam_has_it() {
+        if self.hid.is_none() || !self.connected {
             return None;
         }
         let mut d: Vec<Instant> = Vec::new();
         let ka = Duration::from_millis(cfg.general.keepalive_ms.clamp(500, 2900));
         d.push(self.last_keepalive.map_or(now, |t| t + ka));
+        if self.steam_has_it() {
+            return d.into_iter().min();
+        }
         if self.rumble_sent != (0, 0) {
             d.push(self.last_rumble.map_or(now, |t| t + RUMBLE_RESEND));
         }

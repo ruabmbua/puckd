@@ -263,7 +263,9 @@ touches the controller's settings.
 
 When Steam quits, puckd takes the controller back by itself ("puckd has the controller ·
 Steam let go") and resets the controller's settings, which Steam changes, to the firmware
-defaults before applying its own.
+defaults before applying its own. Lizard mode (the controller's built-in mouse and
+keyboard) stays off throughout: puckd keeps it off even while Steam has the controller,
+and doesn't let Steam or games turn it on.
 
 ### Handing the controller over
 
@@ -271,13 +273,17 @@ defaults before applying its own.
 and puckd:
 
 - **While Steam has the controller**: puckd takes it back. Steam sees the controller
-  unplugged; puckd's modes, overlay and virtual gamepad work again. Banner: "puckd has the
-  controller · Hold View + ≡ Menu to hand it to Steam".
+  unplugged (and drops its virtual gamepad, so games don't see two); puckd's modes,
+  overlay and virtual gamepad work again. Banner: "puckd has the controller · Until Steam
+  restarts, or hold View + ≡ Menu".
 - **While puckd keeps it**: the copy comes back and Steam takes it over again (if Steam
   runs). Banner: "Steam and games may take it".
 
-puckd keeps the controller until you hand it back with the same buttons, even if it
-disconnects and reconnects in between.
+Taking the controller back applies to the Steam that had it: puckd keeps the controller
+until you hand it back with the same buttons, or until that Steam quits. The next Steam
+start takes it over again. Holding the buttons while nothing uses the copy keeps the
+controller in puckd until you hold them again ("Hold View + ≡ Menu to hand it to Steam").
+Either way this survives the controller disconnecting and reconnecting.
 
 The two buttons are never seen by Steam or games while you hold them together. Pressed
 alone, each is held back for a moment (80 ms) in case the other follows; a quick tap still
@@ -311,7 +317,8 @@ gamepad as before.
 | Banner | When |
 |---|---|
 | *Steam has the controller* · Hold View + ≡ Menu for puckd | Steam took over |
-| *puckd has the controller* · Hold View + ≡ Menu to hand it to Steam | you took it back |
+| *puckd has the controller* · Until Steam restarts, or hold View + ≡ Menu | you took it back from Steam |
+| *puckd has the controller* · Hold View + ≡ Menu to hand it to Steam | you kept it in puckd while nothing used it |
 | *Steam and games may take it* · Hold View + ≡ Menu to keep it in puckd | you handed it back |
 | *puckd has the controller* · Steam let go | Steam quit |
 | *game* uses the controller · Native controller in gamepad mode | a game shares it |
