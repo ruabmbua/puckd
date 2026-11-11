@@ -1,7 +1,7 @@
 //! Small libc helpers: ioctl request encoding, poll, signals.
 
 use std::io;
-use std::os::fd::RawFd;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
@@ -45,6 +45,78 @@ pub fn poll(fds: &[RawFd], timeout: Option<Duration>) -> io::Result<Vec<i16>> {
         return Err(e);
     }
     Ok(pfds.iter().map(|p| p.revents).collect())
+}
+
+/// inotify on /dev: tells when hidraw nodes appear, go away or change permissions, so
+/// controllers are found without polling.
+pub struct DevWatch {
+    fd: OwnedFd,
+}
+
+impl DevWatch {
+    pub fn new() -> io::Result<Self> {
+        let fd = unsafe { libc::inotify_init1(libc::IN_NONBLOCK | libc::IN_CLOEXEC) };
+        if fd < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let fd = unsafe { OwnedFd::from_raw_fd(fd) };
+        let mask = libc::IN_CREATE | libc::IN_DELETE | libc::IN_ATTRIB;
+        if unsafe { libc::inotify_add_watch(fd.as_raw_fd(), c"/dev".as_ptr(), mask) } < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(Self { fd })
+    }
+
+    pub fn fd(&self) -> RawFd {
+        self.fd.as_raw_fd()
+    }
+
+    /// Read all pending events; true if one was about a hidraw node.
+    pub fn hidraw_changed(&self) -> bool {
+        let mut hit = false;
+        let mut buf = [0u8; 4096];
+        loop {
+            let n = unsafe { libc::read(self.fd.as_raw_fd(), buf.as_mut_ptr() as *mut _, buf.len()) };
+            if n <= 0 {
+                return hit;
+            }
+            hit |= inotify_names(&buf[..n as usize]).any(|name| name.starts_with(b"hidraw"));
+        }
+    }
+}
+
+/// File names in a buffer of `struct inotify_event`s.
+fn inotify_names(mut b: &[u8]) -> impl Iterator<Item = &[u8]> {
+    const HDR: usize = 16; // wd, mask, cookie, len
+    std::iter::from_fn(move || {
+        if b.len() < HDR {
+            return None;
+        }
+        let len = u32::from_ne_bytes([b[12], b[13], b[14], b[15]]) as usize;
+        let name = b.get(HDR..HDR + len)?;
+        let name = &name[..name.iter().position(|&c| c == 0).unwrap_or(name.len())];
+        b = &b[(HDR + len).min(b.len())..];
+        Some(name)
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inotify_event_names() {
+        let mut b = Vec::new();
+        for name in [&b"hidraw3\0"[..], &b"tty1\0\0\0\0\0\0\0\0\0\0\0\0"[..]] {
+            b.extend_from_slice(&1i32.to_ne_bytes());
+            b.extend_from_slice(&libc::IN_CREATE.to_ne_bytes());
+            b.extend_from_slice(&0u32.to_ne_bytes());
+            b.extend_from_slice(&(name.len() as u32).to_ne_bytes());
+            b.extend_from_slice(name);
+        }
+        let names: Vec<&[u8]> = inotify_names(&b).collect();
+        assert_eq!(names, [&b"hidraw3"[..], &b"tty1"[..]]);
+    }
 }
 
 pub static QUIT: AtomicBool = AtomicBool::new(false);

@@ -163,7 +163,9 @@ switching one off removes the link. When a linked app gets focus, puckd asks:
 - **B, No**: keep the current settings and don't ask again this session.
 
 The question disappears after 10 seconds. When you leave the app, puckd switches back to the
-preset you last chose by hand (unless you changed something without saving). The behaviour
+preset you last chose by hand (unless you changed something without saving). With no
+controller connected (or while Steam has it), puckd neither asks nor switches; it does when
+a controller connects while the app is still in focus. The behaviour
 can be changed under *When an app with a preset gets focus*: ask, automatic or off.
 Per-app presets need a compositor that reports the focused window (Sway, Hyprland, …;
 not KDE).

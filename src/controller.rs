@@ -234,6 +234,12 @@ impl Slot {
         self.client.as_ref().filter(|c| !c.takes_over).map(|c| c.name.as_str())
     }
 
+    /// Something worth watching for: a controller connected, or puckd stepped aside or
+    /// lent the controller to Steam or a game. Otherwise the daemon can sleep.
+    pub fn busy(&self) -> bool {
+        self.connected || self.backed_off || self.client.is_some()
+    }
+
     /// Steam took the controller over (puckd stays out of the way).
     pub fn steam_has_it(&self) -> bool {
         self.client.as_ref().is_some_and(|c| c.takes_over)

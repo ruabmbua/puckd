@@ -3,6 +3,7 @@
 Notes for developers: how the parts work and why. For using puckd see the
 [manual](manual.md); for open work and protocol notes see [PLAN.md](../PLAN.md).
 
+- [Main loop](#main-loop)
 - [Steam pass-through](#steam-pass-through)
   - [Exclusive access: udev rule and broker](#exclusive-access-udev-rule-and-broker)
   - [The clone](#the-clone)
@@ -11,6 +12,24 @@ Notes for developers: how the parts work and why. For using puckd see the
   - [Lizard mode and settings](#lizard-mode-and-settings)
   - [What Steam sends](#what-steam-sends)
   - [Debugging](#debugging)
+
+## Main loop
+
+`Daemon::run` polls the controller nodes, puckd's virtual pads, pass-through clones, the
+overlay thread's wake fd and an inotify watch on `/dev`. With no controller connected it
+sleeps until one of them fires (no timeout):
+
+- Devices: `hid::scan` runs at start and when inotify reports a `hidraw*` node created,
+  deleted or changed (IN_ATTRIB: udev applying ACLs). A node that can't be opened yet is
+  retried after 2 s. Without inotify, scanning falls back to every 2 s.
+- A dongle slot's node stays open with no controller on it; the controller's wireless
+  connect report wakes the loop.
+- The `/proc` scan for other openers (back-off, pass-through holders) runs every
+  `backoff_check_ms` only while a slot is busy (`Slot::busy`: connected, backed off, or
+  lent to a client), and right away when one becomes busy.
+- Focus changes are only acted on (preset popup, auto switch, switching back) while puckd
+  drives a controller (`any_active`); otherwise `focus_pending` defers the decision until
+  one connects.
 
 ## Steam pass-through
 

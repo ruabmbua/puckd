@@ -26,6 +26,7 @@ enum Target {
     Pad,
     Clone,
     Osk,
+    DevWatch,
 }
 
 pub struct Daemon {
@@ -39,6 +40,13 @@ pub struct Daemon {
     presets: Presets,
     /// Focused window (app_id, title), from the overlay thread.
     focused: Option<(String, String)>,
+    /// The focused app changed while no controller was driven by puckd: decide about its
+    /// preset once one is.
+    focus_pending: bool,
+    /// New and removed hidraw nodes (None: inotify unavailable, scan every RESCAN).
+    dev_watch: Option<sys::DevWatch>,
+    /// Scan for devices on the next round (inotify event, failed open to retry).
+    scan_due: Option<Instant>,
 }
 
 impl Daemon {
@@ -58,10 +66,16 @@ impl Daemon {
             osk,
             presets,
             focused: None,
+            focus_pending: false,
+            dev_watch: sys::DevWatch::new().map_err(|e| warn!("watching /dev failed ({e}), polling instead")).ok(),
+            scan_due: None,
         })
     }
 
-    fn rescan(&mut self) {
+    /// Look for added and removed controller nodes. Returns false if a node could not be
+    /// opened (yet: udev may still be setting its permissions), to try again later.
+    fn rescan(&mut self) -> bool {
+        let mut ok = true;
         let found = hid::scan();
         // Removed nodes.
         let gone: Vec<String> = self.slots.keys().filter(|k| !found.iter().any(|f| &f.node == *k)).cloned().collect();
@@ -78,7 +92,8 @@ impl Daemon {
                     self.slots.insert(info.node.clone(), s);
                 }
                 Err(e) => {
-                    // Typically a permission problem; retry on the next scan.
+                    // Typically a permission problem; retry later.
+                    ok = false;
                     debug!("cannot open {}: {e}", info.dev.display());
                     if e.kind() == std::io::ErrorKind::PermissionDenied {
                         warn!("{}: permission denied (install the udev rule, see README)", info.dev.display());
@@ -86,6 +101,12 @@ impl Daemon {
                 }
             }
         }
+        ok
+    }
+
+    /// A controller puckd drives (connected, not taken over by Steam).
+    fn any_active(&self) -> bool {
+        self.slots.values().any(|s| s.is_active())
     }
 
     fn drop_slot(&mut self, node: &str, why: &str) {
@@ -291,6 +312,18 @@ impl Daemon {
         if same {
             return;
         }
+        // No controller to use a preset with (or to answer a popup): decide when one is.
+        if !self.any_active() {
+            self.focus_pending = true;
+            return;
+        }
+        self.apply_focus();
+    }
+
+    /// Offer, apply or leave the focused app's preset.
+    fn apply_focus(&mut self) {
+        self.focus_pending = false;
+        let Some(app) = self.focused.as_ref().map(|(a, _)| a.clone()) else { return };
         let mode = self.cfg.general.preset_switch;
         let Some(p) = self.presets.for_app(&app).map(str::to_string) else {
             self.osk.dismiss();
@@ -377,17 +410,33 @@ impl Daemon {
                 self.reload();
             }
             let now = Instant::now();
-            if self.last_scan.is_none_or(|t| now.duration_since(t) >= RESCAN) {
-                self.rescan();
+            // Device scan: at start, on inotify events, to retry a failed open, or every
+            // RESCAN without inotify.
+            let scan = self.last_scan.is_none()
+                || self.scan_due.is_some_and(|t| now >= t)
+                || (self.dev_watch.is_none() && self.last_scan.is_some_and(|t| now.duration_since(t) >= RESCAN));
+            if scan {
+                self.scan_due = None;
+                if !self.rescan() {
+                    self.scan_due = Some(now + RESCAN);
+                }
                 self.last_scan = Some(now);
             }
-            if self.last_backoff.is_none_or(|t| now.duration_since(t) >= backoff_every) {
+            // Who else has the controller (/proc scan): only while there is a controller.
+            let busy = self.slots.values().any(|s| s.busy());
+            if !busy {
+                self.last_backoff = None;
+            } else if self.last_backoff.is_none_or(|t| now.duration_since(t) >= backoff_every) {
                 self.check_backoff();
                 self.last_backoff = Some(now);
             }
 
             let mut fds = vec![self.osk.wake_fd()];
             let mut targets: Vec<(String, Target)> = vec![(String::new(), Target::Osk)];
+            if let Some(w) = &self.dev_watch {
+                fds.push(w.fd());
+                targets.push((String::new(), Target::DevWatch));
+            }
             for (k, s) in &self.slots {
                 if let Some(fd) = s.hid_fd() {
                     fds.push(fd);
@@ -402,22 +451,21 @@ impl Daemon {
                     targets.push((k.clone(), Target::Clone));
                 }
             }
-            let mut wake = now + MAX_SLEEP;
-            if let Some(t) = self.osk.prompt_deadline() {
-                wake = wake.min(t);
-            }
-            for t in
-                [self.last_scan.map(|t| t + RESCAN), self.last_backoff.map(|t| t + backoff_every)].into_iter().flatten()
+            // Nothing connected: sleep until a device, the overlay or a signal wakes us.
+            let mut wake: Option<Instant> = busy.then_some(now + MAX_SLEEP);
+            let poll_scan = self.dev_watch.is_none().then(|| self.last_scan.map(|t| t + RESCAN)).flatten();
+            let backoff_at = self.last_backoff.map(|t| t + backoff_every);
+            let slot_deadlines: Vec<Instant> =
+                self.slots.values().filter_map(|s| s.next_deadline(now, &self.cfg)).collect();
+            for t in [self.osk.prompt_deadline(), self.scan_due, poll_scan, backoff_at]
+                .into_iter()
+                .flatten()
+                .chain(slot_deadlines)
             {
-                wake = wake.min(t);
+                wake = Some(wake.map_or(t, |w| w.min(t)));
             }
-            for s in self.slots.values() {
-                if let Some(t) = s.next_deadline(now, &self.cfg) {
-                    wake = wake.min(t);
-                }
-            }
-            let timeout = wake.saturating_duration_since(Instant::now());
-            let revents = match sys::poll(&fds, Some(timeout)) {
+            let timeout = wake.map(|w| w.saturating_duration_since(Instant::now()));
+            let revents = match sys::poll(&fds, timeout) {
                 Ok(r) => r,
                 Err(e) => {
                     error!("poll: {e}");
@@ -436,9 +484,15 @@ impl Daemon {
                     self.handle_osk_events();
                     continue;
                 }
+                if let Target::DevWatch = target {
+                    if self.dev_watch.as_ref().is_some_and(|w| w.hidraw_changed()) {
+                        self.scan_due = Some(now);
+                    }
+                    continue;
+                }
                 let Some(slot) = self.slots.get_mut(key) else { continue };
                 match target {
-                    Target::Osk => {}
+                    Target::Osk | Target::DevWatch => {}
                     Target::Hid => {
                         if rev & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 && rev & libc::POLLIN == 0 {
                             dead.push(key.clone());
@@ -498,6 +552,9 @@ impl Daemon {
                 if answer != osk::Answer::No && still_focused {
                     self.switch_for_app(&p, &app);
                 }
+            }
+            if self.focus_pending && self.any_active() {
+                self.apply_focus();
             }
             self.osk.keep_running();
             self.sync_osk_status();
