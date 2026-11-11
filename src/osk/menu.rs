@@ -60,6 +60,26 @@ pub const MAPPABLE: &[(&str, &str)] = &[
     ("rt_click", "RT full pull"),
 ];
 
+/// Short text for a button inside a round glyph.
+pub fn button_glyph(name: &str) -> String {
+    match name {
+        "menu" => "≡".into(),
+        "view" => "V".into(),
+        "steam" => "S".into(),
+        "qam" => "⋯".into(),
+        n => n.to_uppercase(),
+    }
+}
+
+/// How a button is named in text.
+pub fn button_label(name: &str) -> String {
+    match name {
+        "menu" => "≡ Menu".into(),
+        "view" => "View".into(),
+        n => short(n).to_string(),
+    }
+}
+
 fn short(name: &str) -> &str {
     MAPPABLE.iter().find(|(n, _)| *n == name).map(|(_, l)| l.split(" (").next().unwrap_or(l)).unwrap_or(name)
 }
@@ -215,7 +235,11 @@ pub fn items(cfg: &Config, mode: Mode, p: &Presets, serial: Option<&str>) -> Vec
             ),
             None => header("Controller name: this controller did not report a serial number"),
         },
-        item("mode", "Mode", choice(mode, &[(Mode::Desktop, "Desktop"), (Mode::Gamepad, "Gamepad")])),
+        item(
+            "mode",
+            &format!("Mode (or hold {} to switch)", button_label(&cfg.general.switch_button)),
+            choice(mode, &[(Mode::Desktop, "Desktop"), (Mode::Gamepad, "Gamepad")]),
+        ),
         item("desktop.pointer_speed", "Pointer speed", num(d.pointer_speed, 0.1, 4.0, 0.1, false)),
         item("desktop.pointer_accel", "Pointer acceleration", num(d.pointer_accel, 0.0, 3.0, 0.1, false)),
         item("desktop.inertia", "Pointer inertia", Value::Toggle(d.inertia)),

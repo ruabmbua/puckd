@@ -32,7 +32,7 @@ USAGE:
                                      while dumping unless --keep-lizard is given
     puckd haptic-test [SLOT]         play each rumble/haptic effect, with a description
     puckd power-off [SLOT]           turn a controller off
-    puckd osk-preview [settings|mapping|presets|input] [prompt|capture|list|name] [SECS]
+    puckd osk-preview [settings|mapping|presets|input] [prompt|capture|list|name|toast] [SECS]
                                      show the on-screen keyboard overlay without a controller
     puckd pad-preview [PROFILE] [SECS]
                                      create a profile's virtual pad (X and L4 blink, LT ramps)

@@ -140,6 +140,15 @@ pub struct Status {
     pub presets: Vec<Item>,
 }
 
+/// A short banner: big title, then "<who> · Hold (glyph) for <next>".
+#[derive(Debug, Clone, PartialEq)]
+pub struct Toast {
+    pub title: String,
+    pub who: String,
+    pub glyph: String,
+    pub next: String,
+}
+
 pub enum Cmd {
     /// Show the overlay on this page, or (None) where it was when it was last closed.
     Show(Option<Tab>),
@@ -150,6 +159,8 @@ pub enum Cmd {
     /// Show (Some) or hide (None) the small "switch preset?" popup.
     /// (preset, app name)
     Prompt(Option<(String, String)>),
+    /// Short banner after a mode switch.
+    Toast(Toast),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -336,6 +347,12 @@ impl Overlay {
             self.send(Cmd::Prompt(None));
             self.answered.push((p, app, a));
         }
+    }
+
+    /// Show a short banner (e.g. after a mode switch).
+    pub fn toast(&mut self, t: Toast) {
+        self.keep_running();
+        self.send(Cmd::Toast(t));
     }
 
     /// Drop a pending question without recording an answer (focus moved on).

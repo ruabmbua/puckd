@@ -51,6 +51,8 @@ pub struct Slot {
     /// Buttons held when the preset popup was answered: ignored until released, so the
     /// answering press doesn't also reach the overlay or a game.
     suppress: u32,
+    /// Set when the mode changed; the daemon shows a banner and clears it.
+    pub mode_switched: bool,
     /// The connected controller's own serial number (names are keyed by it).
     serial: Option<String>,
     /// Display name (from `[names]`, else "Controller <slot>").
@@ -88,6 +90,7 @@ impl Slot {
             suppress: 0,
             serial: None,
             name: String::new(),
+            mode_switched: false,
             pad_key: pad_key(cfg),
         })
     }
@@ -355,6 +358,7 @@ impl Slot {
         // Gamepad mode may use the mouse too (trackpads), so release it either way.
         self.desk.release_all(desk);
         self.mode = self.mode.toggled();
+        self.mode_switched = true;
         info!("{}: {:?} mode", self.label(), self.mode);
         if cfg.haptics.enabled && cfg.haptics.mode_switch {
             self.haptic(&proto::haptic_command_report(Side::Both, HapticCmd::Click, cfg.haptics.gain_db));

@@ -234,6 +234,25 @@ impl Daemon {
         }
     }
 
+    /// Banner after a mode switch, naming the hold-to-switch button.
+    fn mode_banners(&mut self) {
+        let several = self.slots.values().filter(|s| s.is_active()).count() > 1;
+        let glyph = menu::button_glyph(&self.cfg.general.switch_button);
+        for s in self.slots.values_mut() {
+            // The open overlay already shows the mode in its header.
+            if !std::mem::take(&mut s.mode_switched) || self.osk.owner().is_some() {
+                continue;
+            }
+            let (title, next) = match s.mode {
+                crate::config::Mode::Gamepad => ("Gamepad mode", "desktop mode"),
+                crate::config::Mode::Desktop => ("Desktop mode", "gamepad mode"),
+            };
+            let named = !s.display_name().starts_with("Controller ");
+            let who = if several || named { s.display_name() } else { String::new() };
+            self.osk.toast(osk::Toast { title: title.into(), who, glyph: glyph.clone(), next: next.into() });
+        }
+    }
+
     /// Re-apply the config to every slot after a change.
     fn config_changed(&mut self) {
         for s in self.slots.values_mut() {
@@ -431,6 +450,7 @@ impl Daemon {
             {
                 self.osk.close();
             }
+            self.mode_banners();
             self.osk.tick();
             for (p, app, answer) in self.osk.take_answers() {
                 match answer {

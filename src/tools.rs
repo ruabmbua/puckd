@@ -244,7 +244,7 @@ pub fn osk_preview(args: &[String]) -> ExitCode {
     use crate::osk::{Overlay, Tab, menu};
     let tab = match args
         .iter()
-        .find(|a| a.parse::<u64>().is_err() && !matches!(a.as_str(), "prompt" | "capture" | "list" | "name"))
+        .find(|a| a.parse::<u64>().is_err() && !matches!(a.as_str(), "prompt" | "capture" | "list" | "name" | "toast"))
         .map(String::as_str)
     {
         Some("settings") => Tab::Settings,
@@ -263,6 +263,20 @@ pub fn osk_preview(args: &[String]) -> ExitCode {
     };
     let mut cfg = crate::config::Config::default();
     cfg.gamepad.remap.insert("l4".into(), "a".into());
+    if args.iter().any(|a| a == "toast") {
+        ov.toast(crate::osk::Toast {
+            title: "Gamepad mode".into(),
+            who: "Couch".into(),
+            glyph: "≡".into(),
+            next: "desktop mode".into(),
+        });
+        let end = Instant::now() + Duration::from_secs(secs);
+        while Instant::now() < end && !sys::quit_requested() {
+            let _ = sys::poll(&[ov.wake_fd()], Some(Duration::from_millis(100)));
+            ov.drain();
+        }
+        return ExitCode::SUCCESS;
+    }
     let store = crate::presets::Presets::load(&crate::presets::default_dir(), cfg.gamepad.clone());
     ov.open("preview", Some(tab));
     ov.status(

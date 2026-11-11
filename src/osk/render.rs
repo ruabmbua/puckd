@@ -817,3 +817,35 @@ impl Geo {
         None
     }
 }
+
+/// Size of the mode-switch banner (logical pixels).
+pub const TOAST_W: u32 = 460;
+pub const TOAST_H: u32 = 92;
+
+pub fn draw_toast(t: &crate::osk::Toast, fonts: &mut Fonts, scale: f32) -> Option<Pixmap> {
+    let (w, h) = (TOAST_W as f32, TOAST_H as f32);
+    let mut pm = Pixmap::new((w * scale) as u32, (h * scale) as u32)?;
+    let tf = Transform::from_scale(scale, scale);
+    if let Some(p) = rrect(0.0, 0.0, w, h, 18.0) {
+        pm.fill_path(&p, &paint(BG), FillRule::Winding, tf, None);
+        let st = Stroke { width: 2.0, ..Default::default() };
+        pm.stroke_path(&p, &paint(LATCHED), &st, tf, None);
+    }
+    let mut c = Canvas { pm: &mut pm, fonts, s: scale, t: tf };
+    c.label(&t.title, w / 2.0, 30.0, 24.0, TEXT);
+    // "<who>  ·  Hold (glyph) for <next>", centered as a whole.
+    let px = 15.0;
+    let pre = if t.who.is_empty() { "Hold".to_string() } else { format!("{}  ·  Hold", t.who) };
+    let post = format!("for {}", t.next);
+    let r = 12.0;
+    let pre = c.fonts.ellipsize(&pre, px * scale, (w * 0.45) * scale);
+    let pw = c.fonts.width(&pre, px * scale) / scale;
+    let qw = c.fonts.width(&post, px * scale) / scale;
+    let total = pw + 8.0 + 2.0 * r + 8.0 + qw;
+    let x = (w - total) / 2.0;
+    let cy = 66.0;
+    c.label(&pre, x + pw / 2.0, cy, px, DIM);
+    c.glyph(&t.glyph, x + pw + 8.0 + r, cy, r);
+    c.label(&post, x + pw + 16.0 + 2.0 * r + qw / 2.0, cy, px, DIM);
+    Some(pm)
+}

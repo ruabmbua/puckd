@@ -7,7 +7,7 @@ Userspace driver for the 2nd-gen Steam Controller (2026) and its "Puck" dongle
 - **Gamepad mode**: a virtual Xbox pad per controller, with rumble.
 - **Desktop mode**: a shared virtual mouse and keyboard (trackpad pointer with
   acceleration and inertia, trackpad/stick scrolling, configurable buttons, haptic ticks).
-- **Hold Menu (600 ms)** to switch modes. You feel a click when it switches. A short press still works as a normal button.
+- **Hold Menu (600 ms)** to switch modes. You feel a click when it switches, and a short banner shows the new mode and the hold-to-switch hint (unless the overlay is open: its header shows the mode). A short press still works as a normal button.
 - **On-screen keyboard + settings menu** (QAM button, any mode): a wlr-layer-shell overlay
   that types into the focused window and changes the emulated controller and settings at runtime.
 - **Steps aside** when Steam or an SDL3 game with native Steam Controller support opens

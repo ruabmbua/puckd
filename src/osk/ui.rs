@@ -36,7 +36,7 @@ use smithay_client_toolkit::{
 
 use crate::osk::layout::Labels;
 use crate::osk::model::Model;
-use crate::osk::render::{self, Fonts, Geo, HEIGHT, PROMPT_H, PROMPT_W, WIDTH};
+use crate::osk::render::{self, Fonts, Geo, HEIGHT, PROMPT_H, PROMPT_W, TOAST_H, TOAST_W, WIDTH};
 use crate::osk::{Cmd, Event, EventSink, Tab};
 use smithay_client_toolkit::dispatch2::Dispatch2;
 use smithay_client_toolkit::reexports::client::Proxy;
@@ -47,6 +47,7 @@ use smithay_client_toolkit::reexports::protocols_wlr::foreign_toplevel::v1::clie
 };
 
 const BTN_LEFT: u32 = 0x110;
+const TOAST_TIME: std::time::Duration = std::time::Duration::from_millis(1600);
 
 pub fn run(rx: cchan::Channel<Cmd>, sink: EventSink) {
     if let Err(e) = run_inner(rx, &sink) {
@@ -105,6 +106,12 @@ struct App {
     prompt: Option<LayerSurface>,
     prompt_configured: bool,
     prompt_dirty: bool,
+    /// Mode-switch banner: content, surface, configured, needs drawing, hide time.
+    toast_data: Option<crate::osk::Toast>,
+    toast: Option<LayerSurface>,
+    toast_configured: bool,
+    toast_dirty: bool,
+    toast_until: Option<Instant>,
     /// Toplevels from wlr-foreign-toplevel: (app_id, activated), and the last focused app.
     toplevels: HashMap<ObjectId, Toplevel>,
     /// Last reported focus: (app key, title).
@@ -164,6 +171,11 @@ fn run_inner(rx: cchan::Channel<Cmd>, sink: &EventSink) -> Result<(), String> {
         prompt: None,
         prompt_configured: false,
         prompt_dirty: false,
+        toast_data: None,
+        toast: None,
+        toast_configured: false,
+        toast_dirty: false,
+        toast_until: None,
         toplevels: HashMap::new(),
         focused: None,
         geo: Geo::new(),
@@ -172,7 +184,13 @@ fn run_inner(rx: cchan::Channel<Cmd>, sink: &EventSink) -> Result<(), String> {
     };
 
     while !app.exit {
-        event_loop.dispatch(None, &mut app).map_err(|e| format!("event loop: {e}"))?;
+        let timeout = app.toast_until.map(|t| t.saturating_duration_since(Instant::now()));
+        event_loop.dispatch(timeout, &mut app).map_err(|e| format!("event loop: {e}"))?;
+        if app.toast_until.is_some_and(|t| Instant::now() >= t) {
+            app.toast = None;
+            app.toast_data = None;
+            app.toast_until = None;
+        }
         if app.layer.is_none() && app.configured {
             app.configured = false;
         }
@@ -213,6 +231,11 @@ impl App {
                 }
             }
             Cmd::Status(s) => self.model.set_status(s),
+            Cmd::Toast(t) => {
+                self.toast_data = Some(t);
+                self.toast_dirty = true;
+                self.toast_until = Some(Instant::now() + TOAST_TIME);
+            }
             Cmd::Prompt(text) => {
                 if text.is_none() {
                     self.prompt = None;
@@ -247,11 +270,59 @@ impl App {
         if self.layer.is_some() || self.pending_show { 24 + HEIGHT as i32 + 12 } else { 32 }
     }
 
-    /// Re-place the popup when the overlay opens or closes.
+    /// Bottom margin of the banner: above the overlay and the popup when they show.
+    fn toast_margin(&self) -> i32 {
+        self.prompt_margin() + if self.prompt.is_some() { PROMPT_H as i32 + 12 } else { 0 }
+    }
+
+    /// Re-place the popup and banner when the overlay opens or closes.
     fn place_prompt(&self) {
         if let Some(p) = &self.prompt {
             p.set_margin(0, 0, self.prompt_margin(), 0);
             p.commit();
+        }
+        if let Some(t) = &self.toast {
+            t.set_margin(0, 0, self.toast_margin(), 0);
+            t.commit();
+        }
+    }
+
+    fn draw_toast(&mut self, qh: &QueueHandle<Self>) {
+        if !self.toast_dirty {
+            return;
+        }
+        let Some(data) = self.toast_data.clone() else {
+            self.toast_dirty = false;
+            return;
+        };
+        let Some(layer) = &self.toast else {
+            let surface = self.compositor.create_surface(qh);
+            let l = self.layer_shell.create_layer_surface(qh, surface, Layer::Overlay, Some("puckd-banner"), None);
+            l.set_anchor(Anchor::BOTTOM);
+            l.set_size(TOAST_W, TOAST_H);
+            l.set_margin(0, 0, self.toast_margin(), 0);
+            l.set_keyboard_interactivity(KeyboardInteractivity::None);
+            l.commit();
+            self.toast = Some(l);
+            self.toast_configured = false;
+            return;
+        };
+        if !self.toast_configured {
+            return;
+        }
+        let scale = self.scale.max(1);
+        let Some(pm) = render::draw_toast(&data, &mut self.fonts, scale as f32) else { return };
+        let (w, h) = (pm.width() as i32, pm.height() as i32);
+        let Ok((buffer, canvas)) = self.pool.create_buffer(w, h, w * 4, wl_shm::Format::Argb8888) else { return };
+        for (d, s) in canvas.as_chunks_mut::<4>().0.iter_mut().zip(pm.data().as_chunks::<4>().0) {
+            *d = [s[2], s[1], s[0], s[3]];
+        }
+        let surface = layer.wl_surface();
+        surface.set_buffer_scale(scale);
+        surface.damage_buffer(0, 0, w, h);
+        if buffer.attach_to(surface).is_ok() {
+            layer.commit();
+            self.toast_dirty = false;
         }
     }
 
@@ -333,6 +404,7 @@ impl App {
     fn maybe_draw(&mut self, qh: &QueueHandle<Self>) {
         self.sync_keyboard_grab();
         self.draw_prompt(qh);
+        self.draw_toast(qh);
         if self.pending_show {
             self.pending_show = false;
             if self.layer.is_none() {
@@ -412,6 +484,12 @@ impl OutputHandler for App {
 
 impl LayerShellHandler for App {
     fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, l: &LayerSurface) {
+        if self.toast.as_ref() == Some(l) {
+            self.toast = None;
+            self.toast_data = None;
+            self.toast_until = None;
+            return;
+        }
         if self.prompt.as_ref() == Some(l) {
             self.prompt = None;
             self.prompt_text = None;
@@ -426,6 +504,11 @@ impl LayerShellHandler for App {
     }
 
     fn configure(&mut self, _: &Connection, _: &QueueHandle<Self>, l: &LayerSurface, _: LayerSurfaceConfigure, _: u32) {
+        if self.toast.as_ref() == Some(l) {
+            self.toast_configured = true;
+            self.toast_dirty = true;
+            return;
+        }
         if self.prompt.as_ref() == Some(l) {
             self.prompt_configured = true;
             self.prompt_dirty = true;
