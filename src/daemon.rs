@@ -90,8 +90,11 @@ impl Daemon {
     fn drop_slot(&mut self, node: &str, why: &str) {
         if let Some(mut s) = self.slots.remove(node) {
             info!("{}: {why}", s.label());
-            s.close(&mut self.desk);
+            s.close(&self.cfg, &mut self.desk);
             status::remove(&s.info);
+            if let Some(t) = s.toast.take() {
+                self.osk.toast(t);
+            }
         }
     }
 
@@ -249,7 +252,10 @@ impl Daemon {
             };
             let named = !s.display_name().starts_with("Controller ");
             let who = if several || named { s.display_name() } else { String::new() };
-            self.osk.toast(osk::Toast { title: title.into(), who, glyph: glyph.clone(), next: next.into() });
+            self.osk.toast(osk::Toast {
+                title: title.into(),
+                line: osk::ToastLine::Hold { who, glyph: glyph.clone(), next: next.into() },
+            });
         }
     }
 
@@ -451,6 +457,11 @@ impl Daemon {
                 self.osk.close();
             }
             self.mode_banners();
+            for s in self.slots.values_mut() {
+                if let Some(t) = s.toast.take() {
+                    self.osk.toast(t);
+                }
+            }
             self.osk.tick();
             for (p, app, answer) in self.osk.take_answers() {
                 match answer {

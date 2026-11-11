@@ -832,11 +832,25 @@ pub fn draw_toast(t: &crate::osk::Toast, fonts: &mut Fonts, scale: f32) -> Optio
         pm.stroke_path(&p, &paint(LATCHED), &st, tf, None);
     }
     let mut c = Canvas { pm: &mut pm, fonts, s: scale, t: tf };
-    c.label(&t.title, w / 2.0, 30.0, 24.0, TEXT);
-    // "<who>  ·  Hold (glyph) for <next>", centered as a whole.
+    let title = c.fonts.ellipsize(&t.title, 24.0 * scale, (w - 40.0) * scale);
     let px = 15.0;
-    let pre = if t.who.is_empty() { "Hold".to_string() } else { format!("{}  ·  Hold", t.who) };
-    let post = format!("for {}", t.next);
+    let (who, glyph, next) = match &t.line {
+        crate::osk::ToastLine::Text(s) if s.is_empty() => {
+            c.label(&title, w / 2.0, h / 2.0, 24.0, TEXT);
+            return Some(pm);
+        }
+        crate::osk::ToastLine::Text(s) => {
+            c.label(&title, w / 2.0, 30.0, 24.0, TEXT);
+            let s = c.fonts.ellipsize(s, px * scale, (w - 40.0) * scale);
+            c.label(&s, w / 2.0, 66.0, px, DIM);
+            return Some(pm);
+        }
+        crate::osk::ToastLine::Hold { who, glyph, next } => (who, glyph, next),
+    };
+    c.label(&title, w / 2.0, 30.0, 24.0, TEXT);
+    // "<who>  ·  Hold (glyph) for <next>", centered as a whole.
+    let pre = if who.is_empty() { "Hold".to_string() } else { format!("{who}  ·  Hold") };
+    let post = format!("for {next}");
     let r = 12.0;
     let pre = c.fonts.ellipsize(&pre, px * scale, (w * 0.45) * scale);
     let pw = c.fonts.width(&pre, px * scale) / scale;
@@ -845,7 +859,7 @@ pub fn draw_toast(t: &crate::osk::Toast, fonts: &mut Fonts, scale: f32) -> Optio
     let x = (w - total) / 2.0;
     let cy = 66.0;
     c.label(&pre, x + pw / 2.0, cy, px, DIM);
-    c.glyph(&t.glyph, x + pw + 8.0 + r, cy, r);
+    c.glyph(glyph, x + pw + 8.0 + r, cy, r);
     c.label(&post, x + pw + 16.0 + 2.0 * r + qw / 2.0, cy, px, DIM);
     Some(pm)
 }

@@ -249,6 +249,7 @@ pub fn items(cfg: &Config, mode: Mode, p: &Presets, serial: Option<&str>) -> Vec
         item("haptics.enabled", "Haptics", Value::Toggle(cfg.haptics.enabled)),
         item("haptics.pointer_ticks", "Pointer ticks", Value::Toggle(cfg.haptics.pointer_ticks)),
         item("general.backoff", "Step aside for", choice(cfg.general.backoff, BACKOFF)),
+        item("general.notify", "Connect / disconnect banners", Value::Toggle(cfg.general.notify)),
         item("defaults", "Restore default settings (not the preset)", Value::Button),
         item("save", "Save settings", Value::Button),
         header("Tools"),
@@ -376,6 +377,7 @@ pub fn apply(cfg: &mut Config, id: &str, v: &Value) -> Effect {
         "haptics.enabled" => cfg.haptics.enabled = b(v),
         "haptics.pointer_ticks" => cfg.haptics.pointer_ticks = b(v),
         "general.backoff" => cfg.general.backoff = BACKOFF[idx(v).min(BACKOFF.len() - 1)].0,
+        "general.notify" => cfg.general.notify = b(v),
         "general.preset_switch" => cfg.general.preset_switch = PRESET_SWITCH[idx(v).min(PRESET_SWITCH.len() - 1)].0,
         "remap.clear" => cfg.gamepad.remap.clear(),
         id if id.starts_with("remap.") => {
@@ -455,6 +457,7 @@ pub fn save(cfg: &Config, path: &Path) -> Result<(), String> {
     set(d, "haptics", "pointer_ticks", value(cfg.haptics.pointer_ticks));
     set(d, "general", "backoff", value(backoff));
     set(d, "general", "preset_switch", value(pswitch));
+    set(d, "general", "notify", value(cfg.general.notify));
     write_doc(&doc, path)?;
     save_names(cfg, path)
 }

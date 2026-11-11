@@ -140,13 +140,19 @@ pub struct Status {
     pub presets: Vec<Item>,
 }
 
-/// A short banner: big title, then "<who> · Hold (glyph) for <next>".
+/// A short banner: big title, then one smaller line.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Toast {
     pub title: String,
-    pub who: String,
-    pub glyph: String,
-    pub next: String,
+    pub line: ToastLine,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ToastLine {
+    /// "<who> · Hold (glyph) for <next>" (after a mode switch).
+    Hold { who: String, glyph: String, next: String },
+    /// Plain text (empty: title only).
+    Text(String),
 }
 
 pub enum Cmd {

@@ -79,6 +79,8 @@ pub struct General {
     pub preset_switch: PresetSwitch,
     /// How often lizard mode is turned off again (firmware watchdog is ~3 s).
     pub keepalive_ms: u64,
+    /// Show a banner when a controller connects or disconnects.
+    pub notify: bool,
 }
 
 impl Default for General {
@@ -92,6 +94,7 @@ impl Default for General {
             backoff_check_ms: 2000,
             preset_switch: PresetSwitch::Ask,
             keepalive_ms: 2000,
+            notify: true,
         }
     }
 }

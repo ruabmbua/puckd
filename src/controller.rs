@@ -17,6 +17,8 @@ const RUMBLE_RESEND: Duration = Duration::from_millis(40);
 const TAP_HOLD: Duration = Duration::from_millis(60);
 const MIN_TICK_GAP: Duration = Duration::from_millis(25);
 const GLIDE_STEP: Duration = Duration::from_millis(8);
+/// A disconnect this soon after we asked the controller to turn off is the expected one.
+const POWER_OFF_GRACE: Duration = Duration::from_secs(10);
 
 pub enum SlotError {
     /// The hidraw node is gone (unplugged); drop the slot.
@@ -54,12 +56,19 @@ pub struct Slot {
     suppress: u32,
     /// Set when the mode changed; the daemon shows a banner and clears it.
     pub mode_switched: bool,
+    /// Connect / disconnect banner for the daemon to show.
+    pub toast: Option<osk::Toast>,
     /// The connected controller's own serial number (names are keyed by it).
     serial: Option<String>,
     /// Display name (from `[names]`, else "Controller <slot>").
     name: String,
     /// Gamepad settings the current pad device was built with.
     pad_key: String,
+    /// A "connected" banner was shown (and no "disconnected" since). Survives a
+    /// back-off, so Steam taking the controller over and handing it back stays quiet.
+    announced: bool,
+    /// When we asked the controller to turn off (its disconnect is then expected).
+    powered_off: Option<Instant>,
 }
 
 /// The parts of the gamepad config that need a new virtual device when they change.
@@ -92,7 +101,10 @@ impl Slot {
             serial: None,
             name: String::new(),
             mode_switched: false,
+            toast: None,
             pad_key: pad_key(cfg),
+            announced: false,
+            powered_off: None,
         })
     }
 
@@ -166,7 +178,9 @@ impl Slot {
     pub fn power_off(&mut self) -> io::Result<()> {
         info!("{}: turning the controller off", self.label());
         let Some(hid) = &mut self.hid else { return Err(io::Error::other("not connected")) };
-        hid.set_feature(&proto::power_off_report())
+        hid.set_feature(&proto::power_off_report())?;
+        self.powered_off = Some(Instant::now());
+        Ok(())
     }
 
     /// Connected and driven by us (not backed off).
@@ -297,6 +311,38 @@ impl Slot {
         self.last_keepalive = Some(now);
         self.create_pad(cfg);
         self.write_status();
+        self.powered_off = None;
+        if !self.announced {
+            self.announced = true;
+            if cfg.general.notify {
+                let mode = match self.mode {
+                    Mode::Desktop => "Desktop mode",
+                    Mode::Gamepad => "Gamepad mode",
+                };
+                self.toast = Some(osk::Toast {
+                    title: format!("{} connected", self.display_name()),
+                    line: osk::ToastLine::Text(mode.into()),
+                });
+            }
+        }
+    }
+
+    /// The controller went away (turned off, out of range, unplugged): show a banner, unless
+    /// we turned it off ourselves.
+    fn lost(&mut self, cfg: &Config, desk: &mut DesktopDevices) {
+        let name = self.display_name();
+        self.disconnect(desk);
+        if !std::mem::take(&mut self.announced) {
+            return;
+        }
+        let expected = self.powered_off.take().is_some_and(|t| t.elapsed() < POWER_OFF_GRACE);
+        if cfg.general.notify && !expected {
+            let line = match self.battery {
+                Some((_, level)) => format!("Battery {level} %"),
+                None => String::new(),
+            };
+            self.toast = Some(osk::Toast { title: format!("{name} disconnected"), line: osk::ToastLine::Text(line) });
+        }
     }
 
     fn disconnect(&mut self, desk: &mut DesktopDevices) {
@@ -328,8 +374,8 @@ impl Slot {
     }
 
     /// Release outputs and close the device (slot removed).
-    pub fn close(&mut self, desk: &mut DesktopDevices) {
-        self.disconnect(desk);
+    pub fn close(&mut self, cfg: &Config, desk: &mut DesktopDevices) {
+        self.lost(cfg, desk);
         self.hid = None;
     }
 
@@ -497,7 +543,7 @@ impl Slot {
                     self.route(&st, now, cfg, desk, osk);
                 }
                 Some(Input::Wireless(proto::WIRELESS_CONNECT)) => self.connect(cfg, now),
-                Some(Input::Wireless(proto::WIRELESS_DISCONNECT)) => self.disconnect(desk),
+                Some(Input::Wireless(proto::WIRELESS_DISCONNECT)) => self.lost(cfg, desk),
                 Some(Input::Battery { charge_state, level }) => {
                     if self.battery != Some((charge_state, level)) {
                         info!("{}: battery {level}% ({})", self.label(), proto::charge_state_name(charge_state));

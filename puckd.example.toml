@@ -16,6 +16,8 @@ backoff = "any"            # "any": step aside when any other program opens the 
 backoff_check_ms = 2000
 keepalive_ms = 2000        # must stay below the ~3 s firmware watchdog
 preset_switch = "ask"      # an app with a preset gets focus: "ask" (popup), "auto", "off"
+notify = true              # banner when a controller connects or disconnects
+                           # (not when you turn it off from the overlay)
 
 # [gamepad] is the "Default" preset: how games see the controller. Named presets (made in
 # the overlay) hold the same keys and live in ~/.config/puckd/presets/. All other sections

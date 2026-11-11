@@ -186,9 +186,11 @@ impl Demo {
                 }
                 self.ov.toast(osk::Toast {
                     title,
-                    who: pipe.get(1).unwrap_or(&"").to_string(),
-                    glyph: "≡".into(),
-                    next: pipe.get(2).unwrap_or(&"").to_string(),
+                    line: osk::ToastLine::Hold {
+                        who: pipe.get(1).unwrap_or(&"").to_string(),
+                        glyph: "≡".into(),
+                        next: pipe.get(2).unwrap_or(&"").to_string(),
+                    },
                 })
             }
             "mode" => self.mode = if args.first() == Some(&"gamepad") { Mode::Gamepad } else { Mode::Desktop },

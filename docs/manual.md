@@ -109,10 +109,15 @@ tab has three sections:
   strength and motor swap; trackpads as mouse in gamepad mode. These belong to the active
   preset.
 - **Settings (shared by all presets)**: the controller's name, the mode, pointer speed,
-  acceleration and inertia, scroll speed and direction, gyro mouse, haptics, and when to
-  step aside for Steam. *Save settings* writes them to `~/.config/puckd.toml`; *Restore
+  acceleration and inertia, scroll speed and direction, gyro mouse, haptics, when to
+  step aside for Steam, and connect / disconnect banners. *Save settings* writes them to `~/.config/puckd.toml`; *Restore
   default settings* resets them (not the preset).
 - **Tools**: [Input test](#input-test), and *Turn off controller*.
+
+**Connect / disconnect banners**: when a controller connects or disconnects (turned off,
+out of range, unplugged), puckd shows a short banner like the mode-switch one. Turning a
+controller off with *Turn off controller* shows none, and neither does stepping aside for
+Steam.
 
 **Controller name**: puckd recognizes each controller by its serial number, so a name stays
 with the controller whichever dongle slot it uses. Names are typed with the keyboard (see
