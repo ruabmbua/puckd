@@ -140,6 +140,22 @@ pub struct Status {
     pub presets: Vec<Item>,
 }
 
+/// Marks a filled-in part of a UI text (a program, controller or preset name): when the
+/// text doesn't fit, these parts are shortened first, ending in a dimmed "…".
+pub const CUT_START: char = '\u{E000}';
+pub const CUT_END: char = '\u{E001}';
+
+/// `s` as a part that may be shortened.
+pub fn cut(s: &str) -> String {
+    format!("{CUT_START}{s}{CUT_END}")
+}
+
+/// The text without cut markers (for logs and tests).
+#[allow(dead_code)]
+pub fn plain(s: &str) -> String {
+    s.chars().filter(|&c| c != CUT_START && c != CUT_END).collect()
+}
+
 /// A short banner: big title, then one smaller line.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Toast {

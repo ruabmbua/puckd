@@ -162,6 +162,113 @@ impl Fonts {
         text.chars().map(|c| self.glyph(c, px).1.advance_width).sum()
     }
 
+    /// Fit `text` into `max` device pixels. Parts marked with [`crate::osk::cut`] are
+    /// shortened first (the longest ones, evenly); unmarked text is only cut when that is
+    /// not enough. Shortened parts end in a faded "…" run.
+    pub fn fit(&mut self, text: &str, px: f32, max: f32) -> Vec<Run> {
+        use crate::osk::{CUT_END, CUT_START};
+        // (text, may be shortened)
+        let mut parts: Vec<(String, bool)> = Vec::new();
+        let mut cur = String::new();
+        let mut inside = false;
+        for c in text.chars() {
+            if c == CUT_START || c == CUT_END {
+                if !cur.is_empty() {
+                    parts.push((std::mem::take(&mut cur), inside));
+                }
+                inside = c == CUT_START;
+            } else {
+                cur.push(c);
+            }
+        }
+        if !cur.is_empty() {
+            parts.push((cur, inside));
+        }
+        let widths: Vec<f32> = parts.iter().map(|(t, _)| self.width(t, px)).collect();
+        if widths.iter().sum::<f32>() <= max {
+            return parts.into_iter().map(|(text, _)| Run { text, faded: false }).collect();
+        }
+        let ell = self.width("…", px);
+        let fixed: f32 = parts.iter().zip(&widths).filter(|(p, _)| !p.1).map(|(_, w)| w).sum();
+        let elastic: Vec<usize> = (0..parts.len()).filter(|&i| parts[i].1).collect();
+        if elastic.is_empty() || max - fixed < 2.0 * ell * elastic.len() as f32 {
+            // No marked parts, or not even room for them: cut the whole text at the end.
+            let all = crate::osk::plain(text);
+            return self.cut_runs(&all, px, max, ell);
+        }
+        // Water-fill: the shortest parts keep their width, the rest share what is left.
+        let mut order = elastic.clone();
+        order.sort_by(|&a, &b| widths[a].total_cmp(&widths[b]));
+        let mut caps = vec![f32::INFINITY; parts.len()];
+        let mut left = max - fixed;
+        for (k, &i) in order.iter().enumerate() {
+            let share = left / (order.len() - k) as f32;
+            if widths[i] <= share {
+                left -= widths[i];
+            } else {
+                for &j in &order[k..] {
+                    caps[j] = share;
+                }
+                break;
+            }
+        }
+        let mut out = Vec::new();
+        for (i, (t, _)) in parts.iter().enumerate() {
+            if widths[i] > caps[i] {
+                out.extend(self.cut_runs(t, px, caps[i], ell));
+            } else {
+                out.push(Run { text: t.clone(), faded: false });
+            }
+        }
+        out
+    }
+
+    /// `text` cut to fit `max` (including a faded "…").
+    fn cut_runs(&mut self, text: &str, px: f32, max: f32, ell: f32) -> Vec<Run> {
+        if self.width(text, px) <= max {
+            return vec![Run { text: text.to_string(), faded: false }];
+        }
+        let mut keep = String::new();
+        let mut w = 0.0;
+        for c in text.chars() {
+            let cw = self.glyph(c, px).1.advance_width;
+            if w + cw + ell > max {
+                break;
+            }
+            w += cw;
+            keep.push(c);
+        }
+        let keep = keep.trim_end().to_string();
+        let mut v = Vec::new();
+        if !keep.is_empty() {
+            v.push(Run { text: keep, faded: false });
+        }
+        v.push(Run { text: "…".into(), faded: true });
+        v
+    }
+
+    pub fn runs_width(&mut self, runs: &[Run], px: f32) -> f32 {
+        runs.iter().map(|r| self.width(&r.text, px)).sum()
+    }
+
+    /// Draw runs from (x, y) like [`Fonts::draw`]; faded runs at half strength.
+    pub fn draw_runs(&mut self, pm: &mut Pixmap, runs: &[Run], x: f32, y: f32, px: f32, color: [u8; 4]) {
+        let mut x = x;
+        for r in runs {
+            let c = if r.faded { [color[0], color[1], color[2], color[3] / 2] } else { color };
+            self.draw(pm, &r.text, x, y, px, c);
+            x += self.width(&r.text, px);
+        }
+    }
+
+    /// Fit and draw, left-aligned at (x, y). Returns the drawn width.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_fit(&mut self, pm: &mut Pixmap, text: &str, x: f32, y: f32, px: f32, max: f32, color: [u8; 4]) -> f32 {
+        let runs = self.fit(text, px, max);
+        self.draw_runs(pm, &runs, x, y, px, color);
+        self.runs_width(&runs, px)
+    }
+
     /// The end of `text` that fits in `max` device pixels, "…" in front if cut.
     pub fn ellipsize_start(&mut self, text: &str, px: f32, max: f32) -> String {
         if self.width(text, px) <= max {
@@ -179,25 +286,6 @@ impl Fonts {
             keep.push(c);
         }
         format!("…{}", keep.into_iter().rev().collect::<String>())
-    }
-
-    /// `text` shortened with "…" so it fits in `max` device pixels.
-    pub fn ellipsize(&mut self, text: &str, px: f32, max: f32) -> String {
-        if self.width(text, px) <= max {
-            return text.to_string();
-        }
-        let ell = self.width("…", px);
-        let mut out = String::new();
-        let mut w = 0.0;
-        for c in text.chars() {
-            let cw = self.glyph(c, px).1.advance_width;
-            if w + cw + ell > max {
-                break;
-            }
-            w += cw;
-            out.push(c);
-        }
-        format!("{}…", out.trim_end())
     }
 
     /// Draw text with its baseline-box top-left at (x, y), in device pixels.
@@ -235,6 +323,13 @@ impl Fonts {
             pen += m.advance_width;
         }
     }
+}
+
+/// A piece of fitted text; faded = the "…" of a shortened part.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Run {
+    pub text: String,
+    pub faded: bool,
 }
 
 fn rrect(x: f32, y: f32, w: f32, h: f32, r: f32) -> Option<tiny_skia::Path> {
@@ -290,8 +385,8 @@ pub fn draw(model: &Model, fonts: &mut Fonts, scale: f32) -> Option<Pixmap> {
         // Typing a name: a text field replaces the tab bar.
         let lpx = 15.0 * s;
         let label = format!("{}:", e.label.trim_end_matches('…'));
-        let lw = fonts.width(&label, lpx) / s;
-        fonts.draw(&mut pm, &label, (PAD + 8.0) * s, (PAD + 10.0) * s, lpx, DIM);
+        let lw =
+            fonts.draw_fit(&mut pm, &label, (PAD + 8.0) * s, (PAD + 10.0) * s, lpx, WIDTH as f32 * 0.4 * s, DIM) / s;
         let fx = PAD + 20.0 + lw;
         let fw = WIDTH as f32 - PAD - 8.0 - fx;
         if let Some(p) = rrect(fx, PAD + 2.0, fw, 32.0, 8.0) {
@@ -320,10 +415,10 @@ pub fn draw(model: &Model, fonts: &mut Fonts, scale: f32) -> Option<Pixmap> {
         }
         let info = format!("{}  ·  {}", model.status.title, model.status.detail);
         let info_px = 14.0 * s;
-        // Right of the two tabs.
-        let info = fonts.ellipsize(&info, info_px, (WIDTH as f32 - 2.0 * PAD - 2.0 * TAB_W - 24.0) * s);
-        let iw = fonts.width(&info, info_px);
-        fonts.draw(&mut pm, &info, (WIDTH as f32 - PAD - 6.0) * s - iw, (PAD + 9.0) * s, info_px, DIM);
+        // Right of the two tabs; names are shortened before the rest.
+        let runs = fonts.fit(&info, info_px, (WIDTH as f32 - 2.0 * PAD - 2.0 * TAB_W - 24.0) * s);
+        let iw = fonts.runs_width(&runs, info_px);
+        fonts.draw_runs(&mut pm, &runs, (WIDTH as f32 - PAD - 6.0) * s - iw, (PAD + 9.0) * s, info_px, DIM);
     }
 
     match model.tab {
@@ -432,7 +527,8 @@ fn draw_list(model: &Model, fonts: &mut Fonts, pm: &mut Pixmap, g: &Geo, s: f32,
     };
     if let Some(h) = heading {
         let text = format!("{} › {}   ·   {h}", Tab::Settings.title(), model.tab.title());
-        fonts.draw(pm, &text, (PAD + 18.0) * s, (g.list_y + 2.0) * s, 14.0 * s, DIM);
+        let max = (WIDTH as f32 - 2.0 * PAD - 36.0) * s;
+        fonts.draw_fit(pm, &text, (PAD + 18.0) * s, (g.list_y + 2.0) * s, 14.0 * s, max, DIM);
     }
     if let (Tab::Mapping, Some(edit)) = (model.tab, model.map_edit) {
         draw_map_edit(model, edit, fonts, pm, g, s, t);
@@ -450,9 +546,7 @@ fn draw_list(model: &Model, fonts: &mut Fonts, pm: &mut Pixmap, g: &Geo, s: f32,
         if matches!(it.value, crate::osk::Value::Header) {
             // Section heading: small, dim, with a rule.
             let hpx = 12.5 * s;
-            let label = fonts.ellipsize(&it.label, hpx, (w - 40.0) * s);
-            fonts.draw(pm, &label, (x + 14.0) * s, (y + 14.0) * s, hpx, DIM);
-            let hw = fonts.width(&label, hpx) / s;
+            let hw = fonts.draw_fit(pm, &it.label, (x + 14.0) * s, (y + 14.0) * s, hpx, (w - 40.0) * s, DIM) / s;
             if let Some(p) = rrect(x + 26.0 + hw, y + 22.0, (w - 40.0 - hw).max(0.0), 1.0, 0.0) {
                 pm.fill_path(&p, &paint(KEY), FillRule::Winding, t, None);
             }
@@ -477,19 +571,27 @@ fn draw_list(model: &Model, fonts: &mut Fonts, pm: &mut Pixmap, g: &Geo, s: f32,
             ref v if focused && model.tab != Tab::Mapping => format!("‹  {}  ›", v.display()),
             ref v => v.display(),
         };
-        // Values get at most half the row; labels take the rest (both cut with "…").
-        let v = fonts.ellipsize(&v, px, (w * 0.5) * s);
-        let vw = fonts.width(&v, px);
-        let label = fonts.ellipsize(&it.label, px, (w - 28.0 - 24.0) * s - vw);
-        fonts.draw(pm, &label, (x + 14.0) * s, ty, px, if focused { TEXT } else { DIM });
+        // Values get at most half the row; labels take the rest (both shortened, names first).
+        let itself = v == "itself";
+        let v = fonts.fit(&v, px, (w * 0.5) * s);
+        let vw = fonts.runs_width(&v, px);
+        fonts.draw_fit(
+            pm,
+            &it.label,
+            (x + 14.0) * s,
+            ty,
+            px,
+            (w - 28.0 - 24.0) * s - vw,
+            if focused { TEXT } else { DIM },
+        );
         let col = if focused {
             LOCKED
-        } else if v == "itself" {
+        } else if itself {
             DIM
         } else {
             TEXT
         };
-        fonts.draw(pm, &v, (x + w - 14.0) * s - vw, ty, px, col);
+        fonts.draw_runs(pm, &v, (x + w - 14.0) * s - vw, ty, px, col);
     }
 }
 
@@ -536,6 +638,15 @@ impl Canvas<'_> {
         let w = self.fonts.width(text, px);
         let top = self.fonts.centered_top(cy * self.s, px);
         self.fonts.draw(self.pm, text, cx * self.s - w / 2.0, top, px, c);
+    }
+
+    /// Text fitted into `max` logical pixels (names shortened first), centered on (cx, cy).
+    fn label_fit(&mut self, text: &str, cx: f32, cy: f32, size: f32, max: f32, c: [u8; 4]) {
+        let px = size * self.s;
+        let runs = self.fonts.fit(text, px, max * self.s);
+        let w = self.fonts.runs_width(&runs, px);
+        let top = self.fonts.centered_top(cy * self.s, px);
+        self.fonts.draw_runs(self.pm, &runs, cx * self.s - w / 2.0, top, px, c);
     }
 
     /// A controller button glyph, Steam style: dark circle, thin rim, white letter.
@@ -688,15 +799,9 @@ pub fn draw_prompt(preset: &str, app: &str, fonts: &mut Fonts, scale: f32) -> Op
         pm.stroke_path(&p, &paint(LATCHED), &st, t, None);
     }
     let mut c = Canvas { pm: &mut pm, fonts, s: scale, t };
-    let qpx = 23.0 * scale;
-    let max = (w - 48.0) * scale;
-    let fixed = c.fonts.width("Allow switching to preset \u{201c}\u{201d} for ?", qpx);
-    // Give the preset name up to a third, the app the rest.
-    let preset = c.fonts.ellipsize(preset, qpx, (max - fixed) / 3.0);
-    let pw = c.fonts.width(&preset, qpx);
-    let app = c.fonts.ellipsize(app, qpx, max - fixed - pw);
-    let text = format!("Allow switching to preset \u{201c}{preset}\u{201d} for {app}?");
-    c.label(&text, w / 2.0, 38.0, 23.0, TEXT);
+    use crate::osk::cut;
+    let text = format!("Allow switching to preset \u{201c}{}\u{201d} for {}?", cut(preset), cut(app));
+    c.label_fit(&text, w / 2.0, 38.0, 23.0, w - 48.0, TEXT);
 
     // Two big button hints: (A) Switch   (B) Keep current settings
     let choices = [("A", "Always for this session"), ("X", "Once"), ("B", "No")];
@@ -832,34 +937,80 @@ pub fn draw_toast(t: &crate::osk::Toast, fonts: &mut Fonts, scale: f32) -> Optio
         pm.stroke_path(&p, &paint(LATCHED), &st, tf, None);
     }
     let mut c = Canvas { pm: &mut pm, fonts, s: scale, t: tf };
-    let title = c.fonts.ellipsize(&t.title, 24.0 * scale, (w - 40.0) * scale);
     let px = 15.0;
     let (who, glyph, next) = match &t.line {
         crate::osk::ToastLine::Text(s) if s.is_empty() => {
-            c.label(&title, w / 2.0, h / 2.0, 24.0, TEXT);
+            c.label_fit(&t.title, w / 2.0, h / 2.0, 24.0, w - 40.0, TEXT);
             return Some(pm);
         }
         crate::osk::ToastLine::Text(s) => {
-            c.label(&title, w / 2.0, 30.0, 24.0, TEXT);
-            let s = c.fonts.ellipsize(s, px * scale, (w - 40.0) * scale);
-            c.label(&s, w / 2.0, 66.0, px, DIM);
+            c.label_fit(&t.title, w / 2.0, 30.0, 24.0, w - 40.0, TEXT);
+            c.label_fit(s, w / 2.0, 66.0, px, w - 40.0, DIM);
             return Some(pm);
         }
         crate::osk::ToastLine::Hold { who, glyph, next } => (who, glyph, next),
     };
-    c.label(&title, w / 2.0, 30.0, 24.0, TEXT);
+    c.label_fit(&t.title, w / 2.0, 30.0, 24.0, w - 40.0, TEXT);
     // "<who>  ·  Hold (glyph) for <next>", centered as a whole.
-    let pre = if who.is_empty() { "Hold".to_string() } else { format!("{who}  ·  Hold") };
+    let pre = if who.is_empty() { "Hold".to_string() } else { format!("{}  ·  Hold", crate::osk::cut(who)) };
     let post = format!("for {next}");
     let r = 12.0;
-    let pre = c.fonts.ellipsize(&pre, px * scale, (w * 0.45) * scale);
-    let pw = c.fonts.width(&pre, px * scale) / scale;
+    let pre = c.fonts.fit(&pre, px * scale, (w * 0.45) * scale);
+    let pw = c.fonts.runs_width(&pre, px * scale) / scale;
     let qw = c.fonts.width(&post, px * scale) / scale;
     let total = pw + 8.0 + 2.0 * r + 8.0 + qw;
     let x = (w - total) / 2.0;
     let cy = 66.0;
-    c.label(&pre, x + pw / 2.0, cy, px, DIM);
+    let top = c.fonts.centered_top(cy * scale, px * scale);
+    c.fonts.draw_runs(c.pm, &pre, x * scale, top, px * scale, DIM);
     c.glyph(glyph, x + pw + 8.0 + r, cy, r);
     c.label(&post, x + pw + 16.0 + 2.0 * r + qw / 2.0, cy, px, DIM);
     Some(pm)
+}
+
+#[cfg(test)]
+mod fit_tests {
+    use super::*;
+    use crate::osk::cut;
+
+    fn joined(r: &[Run]) -> String {
+        r.iter().map(|r| r.text.as_str()).collect()
+    }
+
+    #[test]
+    fn names_are_shortened_first() {
+        let Ok(mut f) = Fonts::load() else { return };
+        let px = 14.0;
+        let text = format!("Gamepad mode, native for {} · battery 80%", cut("averyveryveryverylongprogramname"));
+        let full = f.width(&crate::osk::plain(&text), px);
+        let max = full * 0.75;
+        let r = f.fit(&text, px, max);
+        assert!(f.runs_width(&r, px) <= max);
+        let s = joined(&r);
+        assert!(s.starts_with("Gamepad mode, native for avery"), "{s}");
+        assert!(s.ends_with("… · battery 80%"), "{s}");
+        assert!(r.iter().any(|r| r.faded && r.text == "…"));
+        // Fits: unchanged, no markers left.
+        let r = f.fit(&text, px, full + 1.0);
+        assert_eq!(joined(&r), crate::osk::plain(&text));
+    }
+
+    #[test]
+    fn two_names_share_the_room() {
+        let Ok(mut f) = Fonts::load() else { return };
+        let px = 14.0;
+        let text = format!("{} has {}", cut("Steam"), cut("A very long controller name indeed, really"));
+        let max = f.width(&crate::osk::plain(&text), px) * 0.6;
+        let s = joined(&f.fit(&text, px, max));
+        assert!(s.starts_with("Steam has A very"), "{s}");
+        assert!(s.ends_with('…'), "{s}");
+    }
+
+    #[test]
+    fn unmarked_text_is_cut_at_the_end() {
+        let Ok(mut f) = Fonts::load() else { return };
+        let r = f.fit("Some long fixed text without names", 14.0, 80.0);
+        assert!(r.last().is_some_and(|r| r.faded));
+        assert!(f.runs_width(&r, 14.0) <= 80.0);
+    }
 }

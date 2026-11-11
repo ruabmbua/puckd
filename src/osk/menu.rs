@@ -1,6 +1,7 @@
 //! Entries of the overlay's Controller pages (settings, button mapping, presets): built from
 //! the config, applied at runtime, and saved back to the config file (keeping its comments).
 
+use crate::osk::cut;
 use std::path::Path;
 
 use crate::config::{Backoff, Config, Mode, PresetSwitch, Profile, Toggle};
@@ -130,16 +131,16 @@ pub fn presets(cfg: &Config, p: &Presets, app: Option<(&str, &str)>) -> (String,
             if p.active.is_some() {
                 items.push(item(
                     "preset.rename",
-                    &format!("Rename \u{201c}{name}\u{201d}…"),
+                    &format!("Rename \u{201c}{}\u{201d}…", cut(&name)),
                     Value::Text(name.clone()),
                 ));
-                items.push(item("preset.delete", &format!("Delete \u{201c}{name}\u{201d}"), Value::Button));
+                items.push(item("preset.delete", &format!("Delete \u{201c}{}\u{201d}", cut(&name)), Value::Button));
             }
         }
         State::Modified | State::NewFromDefault => {
             if state == State::Modified {
                 let (id, label) = if p.active.is_some() {
-                    ("preset.save", format!("Save changes to \u{201c}{name}\u{201d}"))
+                    ("preset.save", format!("Save changes to \u{201c}{}\u{201d}", cut(&name)))
                 } else {
                     ("preset.save_default", "Save changes as Default".to_string())
                 };
@@ -184,12 +185,20 @@ pub fn presets(cfg: &Config, p: &Presets, app: Option<(&str, &str)>) -> (String,
             if let Some((a, t)) = app {
                 let on = p.apps.get(a) == Some(n);
                 let who = crate::presets::app_display(a, t);
-                items.push(item(&format!("preset.app.{a}"), &format!("Use for {who} (focused)"), Value::Toggle(on)));
+                items.push(item(
+                    &format!("preset.app.{a}"),
+                    &format!("Use for {} (focused)", cut(&who)),
+                    Value::Toggle(on),
+                ));
             }
             for (a, x) in &p.apps {
                 if x == n && app.is_none_or(|(f, _)| f != a) {
                     let who = crate::presets::app_display(a, "");
-                    items.push(item(&format!("preset.app.{a}"), &format!("Use for {who}"), Value::Toggle(true)));
+                    items.push(item(
+                        &format!("preset.app.{a}"),
+                        &format!("Use for {}", cut(&who)),
+                        Value::Toggle(true),
+                    ));
                 }
             }
         }
@@ -201,7 +210,7 @@ pub fn presets(cfg: &Config, p: &Presets, app: Option<(&str, &str)>) -> (String,
         choice(cfg.general.preset_switch, PRESET_SWITCH),
     ));
     let back = p.manual.as_deref().unwrap_or(crate::presets::DEFAULT_NAME);
-    items.push(item("", &format!("Leaving that app returns to \u{201c}{back}\u{201d}"), Value::Header));
+    items.push(item("", &format!("Leaving that app returns to \u{201c}{}\u{201d}", cut(back)), Value::Header));
     (title, items)
 }
 
@@ -230,7 +239,7 @@ pub fn items(cfg: &Config, mode: Mode, p: &Presets, serial: Option<&str>) -> Vec
         match serial {
             Some(s) => item(
                 "controller.name",
-                &format!("Controller name ({s})"),
+                &format!("Controller name ({})", cut(s)),
                 Value::Text(cfg.names.get(s).cloned().unwrap_or_default()),
             ),
             None => header("Controller name: this controller did not report a serial number"),
@@ -282,16 +291,16 @@ pub fn status(c: &StatusCtx) -> Status {
     // Gamepad mode: whether games get puckd's emulated pad or the native controller.
     let mode_s = match (c.mode, c.native) {
         (Mode::Desktop, None) => "Desktop mode".to_string(),
-        (Mode::Desktop, Some(g)) => format!("Desktop mode ({g} sees the controller at rest)"),
+        (Mode::Desktop, Some(g)) => format!("Desktop mode ({} sees the controller at rest)", cut(g)),
         (Mode::Gamepad, None) => "Gamepad mode, emulated".to_string(),
-        (Mode::Gamepad, Some(g)) => format!("Gamepad mode, native for {g}"),
+        (Mode::Gamepad, Some(g)) => format!("Gamepad mode, native for {}", cut(g)),
     };
     let bat = c.battery.map(|(cs, l)| format!(" · battery {l}% ({})", charge_state_name(cs))).unwrap_or_default();
     let (mapping_title, mapping) = mapping(c.cfg, c.presets);
     let (presets_title, presets) = presets(c.cfg, c.presets, c.app);
     let _ = c.slot;
     Status {
-        title: c.name.to_string(),
+        title: cut(c.name),
         detail: format!("{} · {mode_s}{bat}", c.presets.describe(&c.cfg.gamepad)),
         items: items(c.cfg, c.mode, c.presets, c.serial),
         mapping_title,

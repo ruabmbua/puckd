@@ -291,14 +291,14 @@ impl Slot {
             self.desk.release_all(desk);
             self.switch = SwitchButton::default();
             self.toast = Some(osk::Toast {
-                title: format!("{name} has {}", self.which()),
+                title: format!("{} has {}", osk::cut(&name), self.which()),
                 line: osk::ToastLine::Text(format!("Hold {} for puckd", chord_label(cfg))),
                 secs: osk::Toast::LONG,
             });
         } else {
             info!("{}: {name} uses the controller natively (shared with puckd)", self.label());
             self.toast = Some(osk::Toast {
-                title: format!("{name} uses {}", self.which()),
+                title: format!("{} uses {}", osk::cut(&name), self.which()),
                 line: osk::ToastLine::Text("Native controller in gamepad mode".into()),
                 secs: osk::Toast::NORMAL,
             });
@@ -328,7 +328,7 @@ impl Slot {
 
     /// "the controller", or its name when it has one.
     fn which(&self) -> String {
-        if self.name.is_empty() { "the controller".into() } else { self.name.clone() }
+        if self.name.is_empty() { "the controller".into() } else { osk::cut(&self.name) }
     }
 
     /// The hand-over chord: puckd ↔ Steam (and games).
@@ -359,7 +359,7 @@ impl Slot {
                 }
             );
             let line = match from {
-                Some((_, name)) => format!("Until {name} restarts, or hold {}", chord_label(cfg)),
+                Some((_, name)) => format!("Until {} restarts, or hold {}", osk::cut(&name), chord_label(cfg)),
                 None => format!("Hold {} to hand it to Steam", chord_label(cfg)),
             };
             self.toast = Some(osk::Toast {
@@ -403,7 +403,7 @@ impl Slot {
                     if took {
                         self.toast = Some(osk::Toast {
                             title: format!("puckd has {}", self.which()),
-                            line: osk::ToastLine::Text(format!("{name} let go")),
+                            line: osk::ToastLine::Text(format!("{} let go", osk::cut(&name))),
                             secs: osk::Toast::NORMAL,
                         });
                     }
@@ -559,7 +559,7 @@ impl Slot {
                     Mode::Gamepad => "Gamepad mode",
                 };
                 self.toast = Some(osk::Toast {
-                    title: format!("{} connected", self.display_name()),
+                    title: format!("{} connected", osk::cut(&self.display_name())),
                     line: osk::ToastLine::Text(mode.into()),
                     secs: osk::Toast::NORMAL,
                 });
@@ -582,7 +582,7 @@ impl Slot {
                 None => String::new(),
             };
             self.toast = Some(osk::Toast {
-                title: format!("{name} disconnected"),
+                title: format!("{} disconnected", osk::cut(&name)),
                 line: osk::ToastLine::Text(line),
                 secs: osk::Toast::NORMAL,
             });

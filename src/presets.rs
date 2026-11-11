@@ -136,8 +136,8 @@ impl Presets {
     /// One-line description, e.g. "Racing", "Racing (modified)", "new preset (unsaved)".
     pub fn describe(&self, cur: &Gamepad) -> String {
         match self.state(cur) {
-            State::Clean => self.active_name().to_string(),
-            State::Modified => format!("{} (modified)", self.active_name()),
+            State::Clean => crate::osk::cut(self.active_name()),
+            State::Modified => format!("{} (modified)", crate::osk::cut(self.active_name())),
             State::NewFromDefault => "new preset (unsaved)".into(),
         }
     }
