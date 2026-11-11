@@ -38,6 +38,42 @@ Next:
 - OSK: done (milestone 8), with a settings tab. Possible extras: F-keys/numpad layer, word
   suggestions, per-app key repeat.
 
+## Pass-through mode (branch `uhid-passthrough`)
+
+Goal: puckd owns the hardware exclusively; Steam and SDL games get a byte-level clone of the
+controller, so their native Steam Controller support (gyro, trackpads, haptics) works.
+puckd keeps desktop mode, the overlay and its buttons, and decides who gets the input.
+
+Findings (2026-11-11, `puckd uhid-clone` spike, Steam + Outer Wilds, usbmon baseline):
+- A uhid clone of a dongle slot (28de:1304) is **rejected**: SDL's triton driver accepts
+  dongles only with `interface_number` 2..5, and a uhid device has no USB parent
+  (interface -1). Steam acts the same: it never sends 0x83/0x87, lizard mode stays on.
+- The same slot cloned as a **wired controller (28de:1302)**, same descriptor, bus USB,
+  **works**: Steam lists it, configures it (0x87 settings, 0x83 attributes, 0xae serial),
+  sends haptics (output 0x81/0x85), and games see it through Steam Input. No fake USB
+  device (dummy_hcd) needed.
+- Steam on the real dongle: 0x02 `b4` status on interface 6 (control) first, then 0x87
+  lizard-off to every slot (EPIPE on empty ones), then per connected slot 0x83, 0xae,
+  0x02 `f3`, 0x01 `ed` (string attributes `user/wireless_transport`, `esb/bond`), 0xc1,
+  0xdc, 0xe2. Report ID 2 messages are for the dongle itself.
+- The Puck also has a CDC-ACM serial console (interface 0, `/dev/ttyACM*`, a `dongle~$`
+  shell with firmware logs); Steam opens it.
+- Steam's rule `KERNELS=="000[356]:28DE:*"` gives the user access to the clone's hidraw.
+
+Plan:
+1. In the daemon: one wired-persona clone per *connected* controller (any link), created
+   on connect, destroyed on disconnect. Dongle-level traffic (report 2, 0x79/0x7b) stays
+   with puckd. No uinput pad in this mode (else games see two controllers).
+2. Arbitration: gamepad mode forwards input to the clone; desktop mode / overlay open
+   sends neutral state. puckd keeps the switch and overlay buttons. Steam's 0x87 settings
+   pass through, except lizard mode stays off; puckd's keepalive continues.
+3. Exclusive access: udev rule sorted before 73-seat-late that drops `uaccess` from the
+   real hidraw nodes (and the ttyACM console); a small root broker (`puckd broker`,
+   system service) opens them plus /dev/uhid and passes the fds to the user daemon over a
+   unix socket (SCM_RIGHTS), checking only the peer uid. Not a security boundary, just
+   keeps other programs from tripping over the hardware.
+4. Kernel 7.3 hid-steam will bind the real device too: unbind or block it in this mode.
+
 ## Prior art (read first)
 
 - `konikvranik/steam-puck-bridge` (C, about 850 lines, no deps): gamepad part done, including
