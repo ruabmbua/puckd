@@ -274,12 +274,17 @@ pub struct StatusCtx<'a> {
     pub name: &'a str,
     pub mode: Mode,
     pub battery: Option<(u8, u8)>,
+    /// A game using the native controller (pass-through), by name.
+    pub native: Option<&'a str>,
 }
 
 pub fn status(c: &StatusCtx) -> Status {
-    let mode_s = match c.mode {
-        Mode::Desktop => "Desktop",
-        Mode::Gamepad => "Gamepad",
+    // Gamepad mode: whether games get puckd's emulated pad or the native controller.
+    let mode_s = match (c.mode, c.native) {
+        (Mode::Desktop, None) => "Desktop mode".to_string(),
+        (Mode::Desktop, Some(g)) => format!("Desktop mode ({g} sees the controller at rest)"),
+        (Mode::Gamepad, None) => "Gamepad mode, emulated".to_string(),
+        (Mode::Gamepad, Some(g)) => format!("Gamepad mode, native for {g}"),
     };
     let bat = c.battery.map(|(cs, l)| format!(" · battery {l}% ({})", charge_state_name(cs))).unwrap_or_default();
     let (mapping_title, mapping) = mapping(c.cfg, c.presets);
@@ -287,7 +292,7 @@ pub fn status(c: &StatusCtx) -> Status {
     let _ = c.slot;
     Status {
         title: c.name.to_string(),
-        detail: format!("{} · {mode_s} mode{bat}", c.presets.describe(&c.cfg.gamepad)),
+        detail: format!("{} · {mode_s}{bat}", c.presets.describe(&c.cfg.gamepad)),
         items: items(c.cfg, c.mode, c.presets, c.serial),
         mapping_title,
         mapping,

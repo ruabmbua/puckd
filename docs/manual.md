@@ -238,8 +238,9 @@ When Steam starts, it takes the controller over and a banner says so:
 > Hold View + ≡ Menu for puckd
 
 From then on Steam handles every button, including its Steam-button and long-press
-features. puckd's gamepad, desktop mode and overlay rest. When Steam quits, puckd takes the
-controller back by itself.
+features. puckd's gamepad, desktop mode and overlay rest: an open overlay closes (an
+unfinished name or mapping is dropped), and a "switch preset?" popup goes away without
+switching. When Steam quits, puckd takes the controller back by itself.
 
 ### Switching between Steam and puckd
 
@@ -265,8 +266,10 @@ controller over; it shares it with puckd:
 - The game sees one controller, not two: puckd's own gamepad steps aside while the game
   uses the real one.
 
-A short banner says when a game starts using the controller. If Steam starts meanwhile,
-Steam takes over. Games that only know ordinary gamepads keep using puckd's gamepad.
+A short banner says when a game starts using the controller, and the overlay's header
+shows which way games get the controller: "Gamepad mode, emulated" (puckd's gamepad) or
+"Gamepad mode, native for *game*". If Steam starts meanwhile, Steam takes over. Games that
+only know ordinary gamepads keep using puckd's gamepad.
 
 ### Banners
 

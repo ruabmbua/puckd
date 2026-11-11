@@ -229,8 +229,13 @@ impl Slot {
         self.connected && self.hid.is_some() && !self.steam_has_it()
     }
 
+    /// The game sharing the native controller with puckd, if any (not Steam).
+    pub fn native_client(&self) -> Option<&str> {
+        self.client.as_ref().filter(|c| !c.takes_over).map(|c| c.name.as_str())
+    }
+
     /// Steam took the controller over (puckd stays out of the way).
-    fn steam_has_it(&self) -> bool {
+    pub fn steam_has_it(&self) -> bool {
         self.client.as_ref().is_some_and(|c| c.takes_over)
     }
 

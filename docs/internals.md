@@ -86,6 +86,12 @@ A client counts as attached on its first output or SET_REPORT. Who it is comes f
   timestamps kept). The uinput pad goes away (the game would see two controllers) and so
   does the gamepad-mode trackpad mouse.
 - If Steam opens a shared clone, the share becomes a take-over.
+- On take-over the daemon closes the overlay if Steam's controller owned it (`is_active`
+  turns false; `Model::hide` drops a name entry or mapping capture) and dismisses a pending
+  preset popup when no controller puckd drives is left to answer it. Banners stay: they
+  time out.
+- The overlay header (`menu::status`, `StatusCtx::native`) says "Gamepad mode, emulated"
+  or "Gamepad mode, native for <game>".
 - Release: `check_passthrough` (every `backoff_check_ms`, 2 s) finds no process holding the
   clone open. UHID_CLOSE doesn't help: the compositor keeps the clone's hid-generic input
   devices open.

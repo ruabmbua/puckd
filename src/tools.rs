@@ -298,6 +298,7 @@ pub fn osk_preview(args: &[String]) -> ExitCode {
             name: "Couch",
             mode: crate::config::Mode::Desktop,
             battery: Some((1, 88)),
+            native: None,
         }),
     );
     if args.iter().any(|a| a == "prompt") {

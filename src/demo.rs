@@ -63,6 +63,7 @@ impl Demo {
             name: "Couch",
             mode: self.mode,
             battery: Some((1, 88)),
+            native: None,
         });
         self.ov.status("demo", st);
     }

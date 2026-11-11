@@ -345,6 +345,7 @@ impl Daemon {
             name: &slot.display_name(),
             mode: slot.mode,
             battery: slot.battery(),
+            native: slot.native_client(),
         });
         self.osk.status(&owner, st);
     }
@@ -460,11 +461,21 @@ impl Daemon {
             for s in self.slots.values_mut() {
                 s.tick(now, &self.cfg, &mut self.desk, &mut self.osk);
             }
-            // Owner gone, disconnected or backed off: close the overlay.
+            // Owner gone, disconnected, backed off or taken over by Steam: close the overlay
+            // (and whatever it was asking, e.g. a name being typed).
             if let Some(o) = self.osk.owner()
                 && self.slots.get(o).is_none_or(|s| !s.is_active())
             {
                 self.osk.close();
+            }
+            // A question no controller can answer any more (all taken over by Steam): drop it,
+            // nothing is done. Banners time out by themselves.
+            if self.osk.prompt_active()
+                && self.slots.values().any(|s| s.steam_has_it())
+                && !self.slots.values().any(|s| s.is_active())
+            {
+                info!("no controller left to answer the popup, dismissing it");
+                self.osk.dismiss();
             }
             self.mode_banners();
             for s in self.slots.values_mut() {
