@@ -301,6 +301,7 @@ only know ordinary gamepads keep using puckd's gamepad.
 | The overlay doesn't appear | Your compositor needs wlr-layer-shell (not available on GNOME). Run `puckd -v` and look for "overlay". |
 | A game sees two controllers | Is Steam Input or another driver also active? puckd steps aside when Steam opens the controller. |
 | Steam doesn't list the controller (full install) | Did you take it back with View + ≡ Menu? Hold the buttons again. Otherwise run `puckd -v`: it should say "pass-through device" when the controller connects. |
+| The controller is connected over Bluetooth | Not supported: use the Puck or a cable. |
 | Full install: `puckd list` says "permission denied" | Check the full install steps in the [README](../README.md#full-install-steam-gets-the-real-controller): the `puckd` group and `puckd-broker.socket`. |
 | Buttons are mixed up in one game | Make a preset for it, try another emulated controller, or remap buttons. |
 | Check what the controller sends | Overlay → Controller → Input test, or `puckd dump` in a terminal. |

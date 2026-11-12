@@ -150,6 +150,52 @@ pub fn is_controller_node(node: &str) -> bool {
     id.is_some_and(|(_, v, p)| is_supported(v, p)) && !phys.starts_with(OWN_PHYS_PREFIX)
 }
 
+/// Whether the running kernel's hid-steam knows the 2026 wired controller (Linux 7.3+, or a
+/// backport), from the module alias tables. Then the pass-through clone gets
+/// `passthrough::Rdesc::Pogo`, or hid-steam would take it.
+pub fn kernel_steam_knows_triton() -> bool {
+    static KNOWS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *KNOWS.get_or_init(|| {
+        let Ok(release) = fs::read_to_string("/proc/sys/kernel/osrelease") else { return false };
+        let dir = Path::new("/lib/modules").join(release.trim());
+        ["modules.alias", "modules.builtin.alias"]
+            .iter()
+            .any(|f| fs::read_to_string(dir.join(f)).is_ok_and(|t| aliases_triton(&t)))
+    })
+}
+
+fn aliases_triton(alias_table: &str) -> bool {
+    alias_table
+        .lines()
+        .any(|l| l.ends_with(" hid_steam") && l.contains(&format!("v0000{VALVE_VID:04X}p0000{PID_TRITON_USB:04X}")))
+}
+
+/// The HID group hid-steam gives its stand-in device (`HID_GROUP_STEAM`).
+pub const HID_GROUP_STEAM: u16 = 0x0103;
+
+/// The HID group of the device behind `node`, from its modalias
+/// ("hid:b0003g0103v000028DEp00001302").
+pub fn group(node: &str) -> Option<u16> {
+    let m = fs::read_to_string(Path::new("/sys/class/hidraw").join(node).join("device/modalias")).ok()?;
+    modalias_group(&m)
+}
+
+fn modalias_group(m: &str) -> Option<u16> {
+    let g = m.trim().split_once('g')?.1.get(..4)?;
+    u16::from_str_radix(g, 16).ok()
+}
+
+/// `DRIVER=` of a HID device's uevent ("" when unbound).
+pub fn uevent_driver(text: &str) -> &str {
+    text.lines().find_map(|l| l.strip_prefix("DRIVER=")).unwrap_or("")
+}
+
+/// The HID driver bound to `node` (e.g. "hidraw11"): "hid-generic", "hid-steam", ...
+pub fn driver(node: &str) -> Option<String> {
+    let uevent = fs::read_to_string(Path::new("/sys/class/hidraw").join(node).join("device/uevent")).ok()?;
+    Some(uevent_driver(&uevent).to_string())
+}
+
 /// The hidraw node (e.g. "hidraw20") of the HID device with this `phys`.
 pub fn node_by_phys(phys: &str) -> Option<String> {
     for e in fs::read_dir("/sys/class/hidraw").ok()?.flatten() {
@@ -332,5 +378,15 @@ mod tests {
         assert_eq!(id, Some((3, 0x28de, 0x1304)));
         assert_eq!(uniq, "FXB1");
         assert_eq!(phys, "usb-x/input3");
+    }
+
+    #[test]
+    fn driver_from_uevent() {
+        assert_eq!(modalias_group("hid:b0003g0103v000028DEp00001302\n"), Some(HID_GROUP_STEAM));
+        assert_eq!(modalias_group("hid:b0003g0001v000028DEp00001304"), Some(1));
+        assert!(aliases_triton("alias hid:b0003g*v000028DEp00001302 hid_steam\n"));
+        assert!(!aliases_triton("alias hid:b0003g*v000028DEp00001205 hid_steam\n"));
+        assert_eq!(uevent_driver("DRIVER=hid-steam\nHID_ID=0003:000028DE:00001304\n"), "hid-steam");
+        assert_eq!(uevent_driver("HID_ID=0003:000028DE:00001304\n"), "");
     }
 }

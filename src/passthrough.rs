@@ -32,11 +32,20 @@ pub struct Clone {
     pub phys: String,
     /// A client sent output or feature reports since we last looked.
     activity: bool,
+    /// Whether hid-steam drives the clone fully (its node is the driver's stand-in), once
+    /// the node exists. Then the driver talks to the clone whenever nobody holds the node.
+    kernel_owned: Option<bool>,
+    /// Last holder check: (when, someone held the node).
+    held_seen: Option<(Instant, bool)>,
 }
+
+/// How long a "someone holds the clone" answer is trusted while filtering.
+const HELD_CACHE: Duration = Duration::from_millis(250);
 
 impl Clone {
     pub fn create(hid: &HidDevice, serial: Option<&str>) -> io::Result<Self> {
-        let descriptor = hid.report_descriptor()?;
+        let mode = if hid::kernel_steam_knows_triton() { Rdesc::Pogo } else { Rdesc::Same };
+        let descriptor = clone_descriptor(&hid.report_descriptor()?, mode);
         let phys = format!("{}/passthrough", hid.info.stable_id());
         debug_assert!(phys.starts_with(OWN_PHYS_PREFIX));
         // A dongle slot becomes a wired controller; wired and BLE controllers keep their
@@ -58,7 +67,7 @@ impl Clone {
                 descriptor: &descriptor,
             },
         )?;
-        Ok(Self { dev, phys, activity: false })
+        Ok(Self { dev, phys, activity: false, kernel_owned: None, held_seen: None })
     }
 
     pub fn fd(&self) -> i32 {
@@ -106,11 +115,55 @@ impl Clone {
         }
     }
 
+    /// Safety net for a kernel whose hid-steam binds the clone fully (Linux 7.3 doesn't:
+    /// see `Rdesc::Pogo`). Its node is then the driver's stand-in, and while no program
+    /// holds it, hid-steam sends its own set-up commands. Those must not reach the
+    /// controller or count as a client.
+    fn kernel_owned(&mut self) -> Option<bool> {
+        if self.kernel_owned.is_none() {
+            let node = hid::node_by_phys(&self.phys)?;
+            let owned = hid::group(&node) == Some(hid::HID_GROUP_STEAM);
+            if owned {
+                log::warn!(
+                    "{}: the kernel's hid-steam drives the pass-through device; \
+                     puckd keeps its commands from the controller",
+                    self.phys
+                );
+            }
+            self.kernel_owned = Some(owned);
+        }
+        self.kernel_owned
+    }
+
+    /// Whether a request comes from a program (true) or from hid-steam (false). Without a
+    /// node (hid-steam sets up before it adds its stand-in) no program can be asking.
+    fn program_is_asking(&mut self) -> bool {
+        match self.kernel_owned() {
+            Some(false) => return true,
+            Some(true) => {}
+            None => return false,
+        }
+        if let Some((t, true)) = self.held_seen
+            && t.elapsed() < HELD_CACHE
+        {
+            return true;
+        }
+        let held = self.holder().is_some();
+        self.held_seen = Some((Instant::now(), held));
+        if !held {
+            debug!("pass-through: dropped a request from the kernel's hid-steam");
+        }
+        held
+    }
+
     /// Serve requests from the clone's users against the real controller.
     pub fn serve(&mut self, hid: &mut HidDevice) -> io::Result<()> {
         while let Some(ev) = self.dev.read_event()? {
             match ev {
                 Event::Output { rtype, mut data } => {
+                    if !self.program_is_asking() {
+                        continue;
+                    }
                     self.activity = true;
                     keep_lizard_off(&mut data);
                     let r = if rtype == uhid::FEATURE_REPORT {
@@ -131,6 +184,10 @@ impl Clone {
                     }
                 }
                 Event::SetReport { id, rtype, mut data, .. } => {
+                    if !self.program_is_asking() {
+                        self.dev.set_report_reply(id, 0)?;
+                        continue;
+                    }
                     self.activity = true;
                     keep_lizard_off(&mut data);
                     let errno = match hid.set_report(rtype, &data) {
@@ -267,6 +324,28 @@ impl Chord {
     }
 }
 
+/// How the clone's report descriptor differs from the controller's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Rdesc {
+    /// Unchanged.
+    Same,
+    /// An empty vendor collection FF00:0002 first, then the controller's descriptor.
+    Pogo,
+}
+
+/// Linux 7.3's hid-steam leaves a 2026 controller interface alone when its first
+/// collection is FF00:0002, the Puck's stripped-down pogo pin interface: a plain
+/// `hid_hw_start`, own hidraw node, no stand-in, no set-up traffic, no kernel gamepad.
+/// Steam doesn't mind the extra collection.
+const POGO_COLLECTION: [u8; 8] = [0x06, 0x00, 0xff, 0x09, 0x02, 0xa1, 0x01, 0xc0];
+
+pub fn clone_descriptor(d: &[u8], mode: Rdesc) -> Vec<u8> {
+    match mode {
+        Rdesc::Same => d.to_vec(),
+        Rdesc::Pogo => [&POGO_COLLECTION[..], d].concat(),
+    }
+}
+
 fn hex(b: &[u8]) -> String {
     // Trailing zeros are noise in 64-byte reports.
     let end = b.iter().rposition(|&x| x != 0).map_or(1.min(b.len()), |p| p + 1);
@@ -288,6 +367,7 @@ pub fn run(args: &[String]) -> ExitCode {
     let mut bus: Option<u16> = None;
     let mut pid: Option<u16> = None;
     let mut log_input = false;
+    let mut rdesc = Rdesc::Same;
     let mut nodes: Vec<String> = Vec::new();
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -311,6 +391,16 @@ pub fn run(args: &[String]) -> ExitCode {
                 }
             },
             "--log-input" => log_input = true,
+            "--rdesc" => {
+                rdesc = match it.next().map(String::as_str) {
+                    Some("same") => Rdesc::Same,
+                    Some("pogo") => Rdesc::Pogo,
+                    _ => {
+                        eprintln!("--rdesc same|pogo");
+                        return ExitCode::from(2);
+                    }
+                }
+            }
             "all" => {
                 let mut v: Vec<String> = fs::read_dir("/sys/class/hidraw")
                     .map(|rd| rd.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect())
@@ -323,7 +413,9 @@ pub fn run(args: &[String]) -> ExitCode {
         }
     }
     if nodes.is_empty() {
-        eprintln!("usage: puckd uhid-clone [--bus usb|ble|virtual] [--pid HEX] [--log-input] all | hidrawN...");
+        eprintln!(
+            "usage: puckd uhid-clone [--bus usb|ble|virtual] [--pid HEX] [--rdesc same|pogo] [--log-input] all | hidrawN..."
+        );
         return ExitCode::from(2);
     }
 
@@ -337,7 +429,7 @@ pub fn run(args: &[String]) -> ExitCode {
         let sysd = Path::new("/sys/class/hidraw").join(n);
         let (id, uniq, phys, name) = hid::parse_uevent(&fs::read_to_string(sysd.join("device/uevent"))?);
         let (b, v, p) = id.ok_or_else(|| io::Error::other("no HID_ID"))?;
-        let desc = fs::read(sysd.join("device/report_descriptor"))?;
+        let desc = clone_descriptor(&fs::read(sysd.join("device/report_descriptor"))?, rdesc);
         let real = fs::OpenOptions::new()
             .read(true)
             .write(true)
@@ -529,6 +621,22 @@ mod tests {
         let mut other = vec![1, 0x83, 0, 9, 1, 0];
         keep_lizard_off(&mut other);
         assert_eq!(other, [1, 0x83, 0, 9, 1, 0]);
+    }
+
+    /// The 2026 controller's slot descriptor (Puck interface 2): mouse 0x40, keyboard 0x41,
+    /// vendor FF00:0001 with the rest.
+    const SLOT_RDESC: &str = "05010902a10185400901a100050919012902150025017501950281027506950181010501093009311581257f750895028106950109388106050c0a380295018106c0c005010906a1018541050719e029e71500250175019508810281011900296515002565750895068100c00600ff0901a1018542150026ff0075089535094281028544150026ff0075089505094481028579150026ff0075089501097981028543150026ff007508950e09438102857b150026ff007508950c097b81028545150026ff007508952d094581028580150026ff0075089509098091028581150026ff0075089507098191028582150026ff0075089503098291028583150026ff0075089509098391028584150026ff0075089508098491028585150026ff0075089503098591028586150026ff0075089503098691028587150026ff007508953f098791028589150026ff007508953f098991028588150026ff007508953f098891028501953f0901b1028502953f0901b102c0";
+
+    fn unhex(s: &str) -> Vec<u8> {
+        (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
+    }
+
+    #[test]
+    fn pogo_descriptor_starts_with_pogo_collection() {
+        let d = unhex(SLOT_RDESC);
+        let p = clone_descriptor(&d, Rdesc::Pogo);
+        assert_eq!(&p[..8], &POGO_COLLECTION);
+        assert_eq!(&p[8..], &d[..]);
     }
 
     #[test]

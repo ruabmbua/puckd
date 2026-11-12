@@ -48,7 +48,7 @@ USAGE:
     puckd broker [--config FILE]     (root, usually socket-activated) exclusive mode: hand
                                      the controller's hidraw nodes and /dev/uhid to the
                                      puckd of users in /etc/puckd/broker.toml
-    puckd uhid-clone [--bus usb|ble|virtual] [--pid HEX] [--log-input] all|hidrawN...
+    puckd uhid-clone [--bus usb|ble|virtual] [--pid HEX] [--rdesc same|pogo] [--log-input] all|hidrawN...
                                      debug: clone hidraw nodes via uhid, forward both ways
                                      and log what Steam & co send (root, daemon stopped)
 

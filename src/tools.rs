@@ -23,14 +23,16 @@ pub fn list() -> ExitCode {
             Ok(_) => "rw ok".to_string(),
             Err(e) => format!("cannot open: {e}"),
         };
+        let driver = hid::driver(&i.node).filter(|d| !d.is_empty()).unwrap_or_else(|| "-".into());
         println!(
-            "slot {:<4} {:<14} {:04x}:{:04x} iface {:<4} uniq {:<16} {access}",
+            "slot {:<4} {:<14} {:04x}:{:04x} iface {:<4} uniq {:<16} driver {:<11} {access}",
             i.slot_label(),
             i.dev.display(),
             i.vid,
             i.pid,
             i.iface.map(|n| n.to_string()).unwrap_or("-".into()),
-            i.uniq
+            i.uniq,
+            driver
         );
     }
     ExitCode::SUCCESS

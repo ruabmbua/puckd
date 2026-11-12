@@ -48,7 +48,10 @@ haptics, troubleshooting.
 
 **System**
 - Linux with `hidraw` and `uinput` (tested on kernel 7.2), and the Puck dongle `28de:1304`.
-  A wired (`28de:1302`) or Bluetooth (`28de:1303`) controller should work but is untested.
+  A wired (`28de:1302`) controller should work but is untested. Kernel 7.3 and later: see
+  [kernel 7.3+](#kernel-73-and-hid-steam).
+- **Bluetooth is not supported.** puckd doesn't aim to support a controller connected over
+  Bluetooth (`28de:1303`); use the Puck or a cable.
 - Read/write access to the Puck's hidraw nodes and `/dev/uinput` (Steam's udev rules or the
   included one).
 - Rust (edition 2024) to build; fontconfig and a sans font for the overlay.
@@ -130,15 +133,34 @@ sudo install -Dm644 dist/broker.toml /etc/puckd/broker.toml
 sudo install -m644 dist/puckd-broker.socket dist/puckd-broker.service /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable --now puckd-broker.socket
 sudo install -m644 dist/72-puckd-exclusive.rules /etc/udev/rules.d/
-sudo udevadm control --reload && sudo udevadm trigger --subsystem-match=hidraw
+sudo udevadm control --reload && sudo udevadm trigger --subsystem-match=hidraw --subsystem-match=input
 ```
 
-Then restart puckd (no new login needed for the group). `puckd list` still says "rw ok",
-and `puckd -v` says "pass-through device" when a controller connects.
+Then restart puckd (no new login needed for the group). `puckd list` still says "rw ok";
+`puckd -v` says "pass-through device" when a controller connects.
 
 To go back to the basic install, remove `/etc/udev/rules.d/72-puckd-exclusive.rules`, run
 the `udevadm` line again and restart puckd; `sudo systemctl disable --now
 puckd-broker.socket` stops the helper.
+
+### Kernel 7.3 and hid-steam
+
+Since Linux 7.3, the kernel's `hid-steam` driver supports this controller: without puckd,
+it gives you a gamepad (hold ≡ Menu to switch between it and lizard mode). It replaces each
+controller's hidraw node with its own and steps aside while a program holds that node open,
+as Steam does.
+
+puckd works with it, with nothing to set up:
+
+- puckd holds the node open, as Steam would. For a moment after you plug in the Puck (or,
+  with the basic install, after Steam quits) the kernel's own gamepad shows up until puckd
+  takes the controller (back).
+- Full install: puckd's pass-through device is made so that `hid-steam` leaves it alone
+  ([details](docs/internals.md#kernel-73-hid-steam)); Steam gets the real controller as on
+  older kernels. Other devices `hid-steam` drives (Steam Deck, 2015 Steam Controller) are
+  not affected.
+
+Not yet tested on real hardware with 7.3.
 
 ## Setup for
 
@@ -274,4 +296,5 @@ How the parts work (Steam pass-through, the broker, protocol notes):
 - With the basic install, `general.backoff = "any"` also steps aside for SDL3 games that
   drive the controller themselves (they then get the full controller). Use `"steam"` to
   step aside only for Steam. With the full install such games share the controller instead.
-- Not yet tested on kernel 7.3+, where the kernel's `hid-steam` handles this controller too.
+- Kernel 7.3+: not yet tested on real hardware ([details](#kernel-73-and-hid-steam)).
+- Bluetooth isn't supported.

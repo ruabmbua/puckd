@@ -74,7 +74,9 @@ filtered out, a neutral controller in desktop mode / overlay, no uinput pad mean
 release puckd sends LOAD_DEFAULT_SETTINGS (0x8E) and SET_DEFAULT_DIGITAL_MAPPINGS (0x85)
 (IDs from the classic Steam Controller table; 0x87 and 0x9F match it), then its settings.
 Untested: the share mode with an SDL3 game, 0x8E/0x85 on this controller, BLE clones.
-Open: kernel 7.3 hid-steam.
+Kernel 7.3 hid-steam: the clone's descriptor starts with a pogo-pin collection, which
+hid-steam leaves alone (docs/internals.md "Kernel 7.3+"); not tested on 7.3 hardware.
+Bluetooth is out of scope.
 
 Tested on hardware (2026-11-11): Steam takes over the clone (banner), the chord hands the
 controller back and forth, and while puckd has it, Steam lists puckd's uinput pad. Except
@@ -82,6 +84,12 @@ the extended profile: Steam ignores an evdev pad with Valve's IDs (28de:1205, it
 hidraw for those), so that profile never shows in Steam's controller list. With
 pass-through this matters less (Steam gets the real thing); a uhid Steam Deck persona
 would fix it if needed.
+
+Idea: a gamepad profile that looks like 7.3 hid-steam's own pad for this controller
+("Steam Controller" / "Wireless Steam Controller", 28de:1302/1304, the Deck layout: same
+buttons incl. BTN_BASE and both grip pairs, trackpads on HAT0/HAT1, triggers on HAT2), so
+games tuned for the kernel driver see the same device. Same catch as the extended
+profile: Steam (and maybe SDL) ignore an evdev pad with Valve's IDs and expect hidraw.
 
 
 Original plan:
@@ -97,6 +105,8 @@ Original plan:
    unix socket (SCM_RIGHTS), checking only the peer uid. Not a security boundary, just
    keeps other programs from tripping over the hardware.
 4. Kernel 7.3 hid-steam will bind the real device too: unbind or block it in this mode.
+   Done: the real device works through hid-steam's stand-in; the clone gets a leading
+   FF00:0002 collection so hid-steam treats it as a pogo pin interface and stays out.
 
 ## Prior art (read first)
 

@@ -45,7 +45,8 @@ which `73-seat-late.rules` turns into an ACL for the logged-in user. Steam runs 
 user, so file permissions can't tell Steam and puckd apart. Instead:
 
 - `dist/72-puckd-exclusive.rules` removes `uaccess` from the real nodes (Puck 1304/1305,
-  wired 1302 by USB attributes, BLE 1303 by `KERNELS`), before `73-seat-late`. Nothing
+  wired 1302 by USB attributes; a BLE 1303 rule is there too, but Bluetooth isn't
+  supported), before `73-seat-late`. Nothing
   running as the user can open them. The clones have no USB parent and bus 0003 with PID
   1302, so they don't match and keep Steam's `KERNELS=="000[356]:28DE:*"` access.
 - `puckd broker` (root) opens real hidraw nodes and `/dev/uhid` (root-only) on request
@@ -66,6 +67,55 @@ user, so file permissions can't tell Steam and puckd apart. Instead:
   offered. Without the broker the old behaviour (back off when someone opens the node)
   stays.
 
+### Kernel 7.3+: hid-steam
+
+Linux 7.3's `hid-steam` binds 1302, 1303, 1304 and 1305 (7.2 had none of them; they got
+hid-generic). On a bound interface it starts the real device without hidraw, keeps it open
+and adds a stand-in HID device (`HID_GROUP_STEAM`, same IDs, name, `phys`, descriptor and
+USB parent; `uniq` *not* copied) that carries the hidraw node. While the stand-in is open
+the driver sends nothing and forwards every report and request unchanged. While it isn't,
+the driver registers its own gamepad, motion device and battery and sends
+`0x85`/`0x8E` (lizard mode back on); for the Puck also on every wireless connect.
+
+- Basic install: puckd opens the stand-in like Steam would, so it works. Differences: the
+  kernel devices appear briefly (plug-in, Steam quitting before puckd reclaims), and
+  `HID_UNIQ` is empty, so `HidInfo::stable_id` falls back to the node name.
+- Full install, real controller: the broker opens the stand-in (its USB parent matches
+  `72-puckd-exclusive.rules`), so it works like the basic install.
+- Full install, clone: as a plain copy (bus USB, 1302) it would match hid-steam too. The
+  driver's set-up traffic (serial, attributes, `0x85`, `0x8E`) would reach `Clone::serve`,
+  count as a client (a false "a program uses the controller" attach) and reset the real
+  controller's settings, and the kernel would add a silent gamepad for the clone whenever
+  nobody holds it.
+- Fix: `steam_is_valve_interface()` skips a 2026 interface whose first collection is
+  FF00:0002 (the Puck's stripped-down pogo pin interface): `steam_probe` then only calls
+  `hid_hw_start(HID_CONNECT_DEFAULT)`, like hid-generic, and `raw_event`/`remove` do
+  nothing without driver state. So the clone's descriptor starts with an empty FF00:0002
+  collection (`passthrough::Rdesc::Pogo`), the real descriptor follows unchanged. Steam
+  accepts it (tested on 7.2: listed, configured, take-over and chord work). puckd adds it
+  only when the running kernel's alias table lists hid_steam for 1302
+  (`hid::kernel_steam_knows_triton`), so older kernels get the plain copy.
+- Safety net, should a later kernel drop that shortcut and drive the clone fully:
+  `Clone::kernel_owned` sees the clone's node in `HID_GROUP_STEAM` (the stand-in) and
+  warns. Then outputs and SET_REPORTs arriving while no process holds the node (or before
+  the node exists) come from hid-steam: `Clone::serve` drops them and doesn't count them
+  as a client; GET_REPORTs still go to the controller. While a program holds the stand-in,
+  hid-steam forwards unchanged and removes its gamepad. While nobody does, that gamepad
+  exists but `72-puckd-exclusive.rules` hides it (below), so games never see a second
+  controller; Steam and SDL3 find the clone through hidraw either way. Not hidden: the
+  driver's battery entry.
+- `72-puckd-exclusive.rules` hides every input device below a uhid device with a `puckd/`
+  phys (hid-steam and hid-generic copy the HID device's phys; udev wants all `ATTRS`/
+  `SUBSYSTEMS` keys on one parent, so the uhid side is matched by `DEVPATH`): no `ID_INPUT*`,
+  `LIBINPUT_IGNORE_DEVICE`, mode 0600 without uaccess. That covers the clone's lizard
+  mouse and keyboard and a hid-steam gamepad, not puckd's uinput devices.
+- Routes that don't work: unbinding hid-steam leaves the device without a driver
+  (hid-generic refuses devices a special driver matches); HID-BPF may write only
+  `name`/`uniq`/`phys`, not `quirks` (that patch was reverted); the usbhid quirk
+  `HID_QUIRK_IGNORE_SPECIAL_DRIVER` works but needs the kernel command line where usbhid
+  is built in (Arch); blacklisting hid-steam also takes it from the Deck and the 2015
+  controller; a clone on `BUS_VIRTUAL` isn't seen by Steam.
+
 ### The clone
 
 One uhid device per *connected* controller, created on connect and removed on disconnect
@@ -81,9 +131,10 @@ Identity:
   configured and driven fully. The controller protocol (feature messages in report 1,
   state report `0x42`) is the same; dongle-level messages (report 2, `b4` status, wireless
   `0x79`/`0x46`) stay with puckd.
-- Wired and BLE controllers keep their own identity (BLE controllers are uhid devices from
-  BlueZ already, which Steam accepts). Untested.
-- Report descriptor: the real node's. `uniq`: the controller's serial. `phys`:
+- A wired controller keeps its own identity. Untested. Bluetooth isn't supported: a BLE
+  controller's clone would keep 28de:1303 on the Bluetooth bus, and on 7.3+ hid-steam
+  takes every BLE interface whatever its descriptor.
+- Report descriptor: the real node's (on 7.3+ with the pogo collection first, above). `uniq`: the controller's serial. `phys`:
   `puckd/<serial>/<slot>/passthrough`; the `puckd/` prefix (`hid::OWN_PHYS_PREFIX`) keeps
   `hid::scan` and the broker from treating a clone as a controller.
 

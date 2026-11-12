@@ -5,10 +5,17 @@
 # Sorts after 60-steam-input.rules / 70-puckd.rules and before 73-seat-late.rules, which
 # turns the "uaccess" tag into an ACL for the logged-in user.
 # Install: sudo install -m644 dist/72-puckd-exclusive.rules /etc/udev/rules.d/
-#          sudo udevadm control --reload && sudo udevadm trigger --subsystem-match=hidraw
+#          sudo udevadm control --reload && sudo udevadm trigger --subsystem-match=hidraw --subsystem-match=input
 #
 # Puck dongles 28de:1304/1305 and the wired controller 28de:1302 (puckd's pass-through
 # devices have no USB parent, so they don't match and keep Steam's access rules).
 KERNEL=="hidraw*", ATTRS{idVendor}=="28de", ATTRS{idProduct}=="1302|1304|1305", TAG-="uaccess", MODE="0600"
 # Bluetooth LE controller 28de:1303
 KERNEL=="hidraw*", KERNELS=="0005:28DE:1303.*", TAG-="uaccess", MODE="0600"
+
+# Input devices of puckd's pass-through devices (uhid devices with phys "puckd/..."; puckd's
+# own uinput devices live under /devices/virtual/input). Steam and SDL3 games use the clone's hidraw node,
+# never these: the clone's lizard mouse and keyboard (puckd never feeds them) and, should
+# the kernel's hid-steam ever drive a clone fully, its gamepad. Hidden so that games don't
+# see a second controller and the compositor doesn't open them.
+SUBSYSTEM=="input", DEVPATH=="/devices/virtual/misc/uhid/*", ATTRS{phys}=="puckd/*", ENV{ID_INPUT}="", ENV{ID_INPUT_JOYSTICK}="", ENV{ID_INPUT_MOUSE}="", ENV{ID_INPUT_KEYBOARD}="", ENV{ID_INPUT_KEY}="", ENV{LIBINPUT_IGNORE_DEVICE}="1", TAG-="uaccess", MODE="0600"
